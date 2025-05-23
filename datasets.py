@@ -10,6 +10,68 @@ import numpy as np
 from numpy.random import random_integers
 from PIL import Image
 
+from spriteworld import sprite, renderers
+
+# Define the possible properties
+shapes = ['square', 'circle', 'triangle']
+sizes = [0.08, 0.09]
+orientations_square = list(np.linspace(0, 90, num=6))
+orientations_triangle = list(np.linspace(0, 120, num=8))
+
+# Function to generate a random sprite at a specific position
+def random_sprite_at_position(x, y):
+    color = np.random.choice(256, 3)
+    shape = np.random.choice(shapes)
+    size = np.random.choice(sizes)
+    if shape == 'square':
+        orientations = orientations_square
+    elif shape == 'triangle':
+        orientations = orientations_triangle
+    else : orientations = [0]
+    orientation = np.random.choice(orientations)
+
+    return sprite.Sprite(
+            shape=shape,
+            x=x,
+            y=y,
+            scale=size,
+            c0=color[0],
+            c1=color[1],
+            c2=color[2],
+            angle=orientation
+        )
+
+# Function to generate positions along a line or curve
+def generate_positions(num_sprites, curviness, center, orientation):
+    theta = np.linspace(0, 2 * np.pi, num_sprites)
+    structure_length = 0.65 + 0.05 * (num_sprites-4)
+    if curviness == 0:
+        # Straight line
+        x = np.zeros(num_sprites)
+        y = np.linspace(-structure_length/2, structure_length/2, num_sprites)
+    else:
+        # Curved line (circle for large curviness)
+        radius = 2 / (np.pi * curviness)
+        theta = structure_length / radius
+        angle_range = np.linspace(-theta/2, theta/2, num_sprites)
+        x = radius * np.cos(angle_range) - radius
+        y = radius * np.sin(angle_range)
+
+    # Rotate positions by orientation angle
+    cos_theta, sin_theta = np.cos((orientation-90) * np.pi/180), np.sin((orientation-90) * np.pi/180)
+    x_rot = cos_theta * x - sin_theta * y
+    y_rot = sin_theta * x + cos_theta * y
+
+    # Translate to center position
+    x_trans = center[0] + x_rot
+    y_trans = center[1] + y_rot
+
+    return x_trans, y_trans
+
+# Function to check if all positions are within the bounds
+def positions_within_bounds(x_positions, y_positions, margin=0.1):
+    return (x_positions >= margin).all() and (x_positions <= 1 - margin).all() and (y_positions >= margin).all() and (y_positions <= 1 - margin).all()
+
 
 def progress_bar(count, total, status=''):
     bar_len = 60
@@ -21,65 +83,56 @@ def progress_bar(count, total, status=''):
     sys.stdout.write('[%s] %s%s ...%s\r' % (bar, percents, '%', status))
     sys.stdout.flush()
 
-def make_sprites(n=50000, height=64, width=64):
+def make_sprites(n=100000, height=128, width=128): #h,w=64 였음
+    renderer = renderers.PILRenderer(
+    image_size=(height, width),
+    anti_aliasing=1
+    )
     images = np.zeros((n, height, width, 3))
-    counts = np.zeros((n,))
+    labels = np.zeros((n, 5))
     print('Generating sprite dataset...')
     for i in range(n):
-        num_sprites = random_integers(1, 5) #요기!!!!!!!!!!!!!!!!!!!!!
-        counts[i] = num_sprites
-        for j in range(num_sprites):
-            pos_y = random_integers(0, height - 12)
-            pos_x = random_integers(0, width - 12)
+        while True:
+            num_sprites = np.random.randint(4, 8)
+            curviness = np.random.randint(5) # 0:Straight 1:Bend 2:Arch 3:Horseshoe 4:Circle
+            center = np.random.uniform(0.2, 0.8, size=2)
+            if curviness == 0:
+                orientation = np.random.choice(range(0, 180, 5))
+            else: orientation = np.random.choice(range(0, 361, 5))
+            x_positions, y_positions = generate_positions(num_sprites, curviness, center, orientation)
+            if positions_within_bounds(x_positions, y_positions):
+                break
+        sprites = [random_sprite_at_position(x, y) for x, y in zip(x_positions, y_positions)]
 
-            scale = random_integers(12, min(16, height-pos_y, width-pos_x))
+        # Generate labels for x,y position
+        x_pos = np.clip(((np.mean(x_positions)-0.2)/0.6)//0.2, 0, 4)  # 0~4 범위로 제한
+        y_pos = np.clip(((np.mean(y_positions)-0.2)/0.6)//0.2, 0, 4)  # 0~4 범위로 제한 #라벨로 -1이 자꾸 나오는 이슈 해결
 
-            cat = random_integers(0, 2)
-            sprite = np.zeros((height, width, 3))
-
-            if cat == 0:  # draw circle
-                center_x = pos_x + scale // 2.0
-                center_y = pos_y + scale // 2.0
-                for x in range(height):
-                    for y in range(width):
-                        dist_center_sq = (x - center_x)**2 + (y - center_y)**2
-                        if  dist_center_sq < (scale // 2.0)**2:
-                            sprite[x][y][cat] = 1.0
-            elif cat == 1:  # draw square
-                sprite[pos_x:pos_x + scale, pos_y:pos_y + scale, cat] = 1.0
-            else:  # draw square turned by 45 degrees
-                center_x = pos_x + scale // 2.0
-                center_y = pos_y + scale // 2.0
-                for x in range(height):
-                    for y in range(width):
-                        if abs(x - center_x) + abs(y - center_y) < (scale // 2.0):
-                            sprite[x][y][cat] = 1.0
-            images[i] += sprite
+        images[i], labels[i] = renderer.render(sprites) / 255.0, [x_pos, y_pos, num_sprites, curviness, orientation]
         if i % 100 == 0:
             progress_bar(i, n)
     images = np.clip(images, 0.0, 1.0)
 
     return {'x_train': images[:4 * n // 5],
-            'count_train': counts[:4 * n // 5],
+            'labels_train': labels[:4 * n // 5],
             'x_test': images[4 * n // 5:],
-            'count_test': counts[4 * n // 5:]}
-
+            'labels_test': labels[4 * n // 5:]}
 
 class Sprites(Dataset):
-    def __init__(self, directory, n=50000, canvas_size=64,
+    def __init__(self, directory, n=10000, canvas_size=128, #canvas_size를 64에서 128로
                  train=True, transform=None):
         np_file = 'sprites_{}_{}.npz'.format(n, canvas_size)
         full_path = os.path.join(directory, np_file)
         os.makedirs(directory, exist_ok=True)
         if not os.path.isfile(full_path):
             gen_data = make_sprites(n, canvas_size, canvas_size)
-            np.savez(full_path, **gen_data)
+            np.savez(full_path, **gen_data) #경로통일 full_path로!
 
         data = np.load(full_path)
 
         self.transform = transform
         self.images = data['x_train'] if train else data['x_test']
-        self.counts = data['count_train'] if train else data['count_test']
+        self.labels = data['labels_train'] if train else data['labels_test']
 
     def __len__(self):
         return self.images.shape[0]
@@ -88,23 +141,4 @@ class Sprites(Dataset):
         img = self.images[idx]
         if self.transform is not None:
             img = self.transform(img)
-        return img, self.counts[idx]
-
-
-class Clevr(Dataset):
-    def __init__(self, directory, transform=None):
-        self.directory = directory
-        self.filenames = os.listdir(directory)
-        self.n = len(self.filenames)
-        self.transform = transform
-
-    def __len__(self):
-        return self.n
-
-    def __getitem__(self, idx):
-        imgpath = os.path.join(self.directory, self.filenames[idx])
-        img = Image.open(imgpath)
-        if self.transform is not None:
-            img = self.transform(img)
-        return img, 1
-
+        return img, self.labels[idx]

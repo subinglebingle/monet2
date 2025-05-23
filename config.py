@@ -19,37 +19,26 @@ config_options = [
     'channel_base',  # Number of channels used for the first U-Net conv layer
     'bg_sigma',  # Sigma of the decoder distributions for the first slot
     'fg_sigma',  # Sigma of the decoder distributions for all other slots
+    'beta', #내가 추가
+    'gamma' #내가 추가
 ]
 
 MonetConfig = namedtuple('MonetConfig', config_options)
 
 sprite_config = MonetConfig(vis_every=50,
-                            batch_size=64,
-                            num_epochs=20,
+                            batch_size=64, #논문: 64
+                            num_epochs=20, #논문에서는 500000 iteration 진행 -> batch_size 64면 epoch=64
                             load_parameters=True,
                             checkpoint_file='./checkpoints/sprites.ckpt',
                             data_dir='./data/',
                             parallel=True,
-                            num_slots=4,
+                            num_slots=9, #constellation dataset에 맞춰서 늘림
                             num_blocks=5,
-                            channel_base=64,
-                            bg_sigma=0.09,
-                            fg_sigma=0.11,
+                            channel_base=128, #64
+                            bg_sigma=0.09, #background sigma, 1번째 슬롯에만 쓰이는 파라미터, 잘 조절하면 slot1에 배경색만 나오게된다. (논문: 0.09)
+                            fg_sigma=0.11, #논문: 0.11
+                            beta=8.0, #논문 0.5
+                            gamma=0.25 #논문 0.25
                            )
-
-clevr_config = MonetConfig(vis_every=50,
-                           batch_size=64,
-                           num_epochs=200,
-                           load_parameters=True,
-                           checkpoint_file='/work/checkpoints/clevr64.ckpt',
-                           data_dir=os.path.expanduser('~/data/CLEVR_v1.0/images/train/'),
-                           parallel=True,
-                           num_slots=11,
-                           num_blocks=6,
-                           channel_base=64,
-                           bg_sigma=0.09,
-                           fg_sigma=0.11,
-                          )
-
 
 

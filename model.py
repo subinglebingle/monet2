@@ -18,56 +18,130 @@ def double_conv(in_channels, out_channels):
         nn.ReLU(inplace=True)
     )
 
+device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class UNet(nn.Module):
-    def __init__(self, num_blocks, in_channels, out_channels, channel_base=64):
-        super().__init__()
-        self.num_blocks = num_blocks
-        self.down_convs = nn.ModuleList()
-        cur_in_channels = in_channels
-        for i in range(num_blocks):
-            self.down_convs.append(double_conv(cur_in_channels,
-                                               channel_base * 2**i))
-            cur_in_channels = channel_base * 2**i
+    def __init__(self):
+        super(UNet, self).__init__()
+    #convolution + batch_normalization + ReLU
+        def CBR2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=True):
+            layers=[]
+            layers+=[nn.Conv2d(in_channels=in_channels, out_channels=out_channels,
+                            kernel_size=kernel_size,stride=stride,padding=padding,
+                            bias=True)]
+            layers+=[nn.BatchNorm2d(num_features=out_channels)]
+            layers+=[nn.ReLU()]
 
-        self.tconvs = nn.ModuleList()
-        for i in range(num_blocks-1, 0, -1):
-            self.tconvs.append(nn.ConvTranspose2d(channel_base * 2**i,
-                                                  channel_base * 2**(i-1),
-                                                  2, stride=2))
+            cbr=nn.Sequential(*layers)
+            return cbr
+        
+        #contracting path
+        self.enc1_1=CBR2d(in_channels=4,out_channels=64) #원래 in_channels=1 #4=3channels+1scope
+        self.enc1_2=CBR2d(in_channels=64,out_channels=64)
 
-        self.up_convs = nn.ModuleList()
-        for i in range(num_blocks-2, -1, -1):
-            self.up_convs.append(double_conv(channel_base * 2**(i+1), channel_base * 2**i))
+        self.pool1=nn.MaxPool2d(kernel_size=2)
 
-        self.final_conv = nn.Conv2d(channel_base, out_channels, 1)
+        self.enc2_1=CBR2d(in_channels=64, out_channels=128)
+        self.enc2_2=CBR2d(in_channels=128,out_channels=128)
 
-    def forward(self, x):
-        intermediates = []
-        cur = x
-        for down_conv in self.down_convs[:-1]:
-            cur = down_conv(cur)
-            intermediates.append(cur)
-            cur = nn.MaxPool2d(2)(cur)
+        self.pool2=nn.MaxPool2d(kernel_size=2)
 
-        cur = self.down_convs[-1](cur)
+        self.enc3_1=CBR2d(in_channels=128, out_channels=256)
+        self.enc3_2=CBR2d(in_channels=256,out_channels=256)
 
-        for i in range(self.num_blocks-1):
-            cur = self.tconvs[i](cur)
-            cur = torch.cat((cur, intermediates[-i -1]), 1)
-            cur = self.up_convs[i](cur)
+        self.pool3=nn.MaxPool2d(kernel_size=2)
 
-        return self.final_conv(cur)
+        self.enc4_1=CBR2d(in_channels=256, out_channels=512)
+        self.enc4_2=CBR2d(in_channels=512,out_channels=512)
+
+        self.pool4=nn.MaxPool2d(kernel_size=2)
+
+        self.enc5_1=CBR2d(in_channels=512,out_channels=1024)
+
+        #Expansive path
+        self.dec5_1=CBR2d(in_channels=1024,out_channels=512)
+
+        self.unpool4=nn.ConvTranspose2d(in_channels=512, out_channels=512,
+                                        kernel_size=2, stride=2, padding=0, bias=True)
+
+        self.dec4_2=CBR2d(in_channels=2*512,out_channels=512) #in_channels가 두배인 이유는 encoder의 일부가 붙기때문(skip connection)
+        self.dec4_1=CBR2d(in_channels=512,out_channels=256)
+    
+        self.unpool3=nn.ConvTranspose2d(in_channels=256, out_channels=256,
+                                        kernel_size=2, stride=2, padding=0, bias=True)
+
+        self.dec3_2=CBR2d(in_channels=2*256,out_channels=256) 
+        self.dec3_1=CBR2d(in_channels=256,out_channels=128)
+
+        self.unpool2=nn.ConvTranspose2d(in_channels=128, out_channels=128,
+                                        kernel_size=2, stride=2, padding=0, bias=True)
+
+        self.dec2_2=CBR2d(in_channels=2*128,out_channels=128) 
+        self.dec2_1=CBR2d(in_channels=128,out_channels=64)
+
+        self.unpool1=nn.ConvTranspose2d(in_channels=64, out_channels=64,
+                                        kernel_size=2, stride=2, padding=0, bias=True)
+
+        self.dec1_2=CBR2d(in_channels=2*64,out_channels=64) 
+        self.dec1_1=CBR2d(in_channels=64,out_channels=64)
+        
+        self.fc=nn.Conv2d(in_channels=64,out_channels=2,kernel_size=1,stride=1,padding=0,bias=True) #원래 out_channels=1
+
+    def forward(self,x):
+        enc1_1=self.enc1_1(x)
+        enc1_2=self.enc1_2(enc1_1)
+        pool1=self.pool1(enc1_2)
+
+        enc2_1=self.enc2_1(pool1)
+        enc2_2=self.enc2_2(enc2_1)
+        pool2=self.pool2(enc2_2)
+
+        enc3_1=self.enc3_1(pool2)
+        enc3_2=self.enc3_2(enc3_1)
+        pool3=self.pool3(enc3_2)
+
+        enc4_1=self.enc4_1(pool3)
+        enc4_2=self.enc4_2(enc4_1)
+        pool4=self.pool4(enc4_2)
+
+        enc5_1=self.enc5_1(pool4)
+
+        dec5_1=self.dec5_1(enc5_1)
+
+        unpool4=self.unpool4(dec5_1)
+        cat4=torch.cat([unpool4, enc4_2], dim=1) #dim=[0:batch, 1:channel, 2:height, 3:width]
+        dec4_2=self.dec4_2(cat4)
+        dec4_1=self.dec4_1(dec4_2)
+
+        unpool3=self.unpool3(dec4_1)
+        cat3=torch.cat([unpool3, enc3_2],dim=1)
+        dec3_2=self.dec3_2(cat3)
+        dec3_1=self.dec3_1(dec3_2)
+
+        unpool2=self.unpool2(dec3_1)
+        cat2=torch.cat([unpool2,enc2_2], dim=1)
+        dec2_2=self.dec2_2(cat2)
+        dec2_1=self.dec2_1(dec2_2)
+
+        unpool1=self.unpool1(dec2_1)
+        cat1=torch.cat([unpool1, enc1_2], dim=1)
+        dec1_2=self.dec1_2(cat1)
+        dec1_1=self.dec1_1(dec1_2)
+
+        x=self.fc(dec1_1)
+        
+        return x
 
 
 class AttentionNet(nn.Module):
     def __init__(self, conf):
         super().__init__()
         self.conf = conf
-        self.unet = UNet(num_blocks=conf.num_blocks,
-                         in_channels=4,
-                         out_channels=2,
-                         channel_base=conf.channel_base)
+        self.unet = UNet().to(device)
+                        # (num_blocks=conf.num_blocks,
+                        #  in_channels=4,
+                        #  out_channels=2,
+                        #  channel_base=conf.channel_base)
 
     def forward(self, x, scope):
         inp = torch.cat((x, scope), 1)
@@ -93,12 +167,12 @@ class EncoderNet(nn.Module):
             nn.ReLU(inplace=True)
         )
 
-        for i in range(4):
+        for i in range(4): 
             width = (width - 1) // 2
             height = (height - 1) // 2
 
         self.mlp = nn.Sequential(
-            nn.Linear(64 * width * height, 256),
+            nn.Linear(64 * width * height, 256), 
             nn.ReLU(inplace=True),
             nn.Linear(256, 32)
         )
@@ -146,8 +220,8 @@ class Monet(nn.Module):
         self.attention = AttentionNet(conf)
         self.encoder = EncoderNet(height, width)
         self.decoder = DecoderNet(height, width)
-        self.beta = 0.5
-        self.gamma = 0.25
+        self.beta = conf.beta
+        self.gamma = conf.gamma
 
     def forward(self, x):
         scope = torch.ones_like(x[:, 0:1])
@@ -171,6 +245,9 @@ class Monet(nn.Module):
             kl_zs += kl_z
             full_reconstruction += mask * x_recon
 
+        # masks 리스트를 그대로 tensor로 concat하기 전 상태로 저장
+        masks_list = masks.copy()        
+
         masks = torch.cat(masks, 1)
         tr_masks = masks.permute(0, 2, 3, 1)
         q_masks = dists.Categorical(probs=tr_masks)
@@ -182,7 +259,8 @@ class Monet(nn.Module):
         #       'kl masks', kl_masks.mean().item())
         loss += self.gamma * kl_masks
         return {'loss': loss,
-                'masks': masks,
+                'masks': masks,           # 합쳐진 마스크 (B, K, H, W)
+                'masks_list': masks_list, # 합치기 전 리스트 (각 요소: (B,1,H,W))
                 'reconstructions': full_reconstruction}
 
 
