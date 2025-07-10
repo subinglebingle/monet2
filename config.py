@@ -25,7 +25,7 @@ config_options = [
 
 MonetConfig = namedtuple('MonetConfig', config_options)
 
-sprite_config = MonetConfig(vis_every=50,
+sprite_config = MonetConfig(vis_every=50, #몇개마다 visualization할건지
                             batch_size=64, #논문: 64
                             num_epochs=20, #논문에서는 500000 iteration 진행 -> batch_size 64면 epoch=64
                             load_parameters=True,

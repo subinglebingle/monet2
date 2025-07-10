@@ -43,7 +43,7 @@ def random_sprite_at_position(x, y):
 
 # Function to generate positions along a line or curve
 def generate_positions(num_sprites, curviness, center, orientation):
-    theta = np.linspace(0, 2 * np.pi, num_sprites)
+    #theta = np.linspace(0, 2 * np.pi, num_sprites) #0~180도 #.....................................필요없는 코드인듯
     structure_length = 0.65 + 0.05 * (num_sprites-4)
     if curviness == 0:
         # Straight line
@@ -83,7 +83,7 @@ def progress_bar(count, total, status=''):
     sys.stdout.write('[%s] %s%s ...%s\r' % (bar, percents, '%', status))
     sys.stdout.flush()
 
-def make_sprites(n=100000, height=128, width=128): #h,w=64 였음
+def make_sprites(n=100000, height=128, width=128): #h,w=64 였음 #500000?? 200000?? 100000
     renderer = renderers.PILRenderer(
     image_size=(height, width),
     anti_aliasing=1
@@ -113,13 +113,13 @@ def make_sprites(n=100000, height=128, width=128): #h,w=64 였음
             progress_bar(i, n)
     images = np.clip(images, 0.0, 1.0)
 
-    return {'x_train': images[:4 * n // 5],
+    return {'x_train': images[:4 * n // 5], #80%
             'labels_train': labels[:4 * n // 5],
-            'x_test': images[4 * n // 5:],
+            'x_test': images[4 * n // 5:], #20%
             'labels_test': labels[4 * n // 5:]}
 
 class Sprites(Dataset):
-    def __init__(self, directory, n=10000, canvas_size=128, #canvas_size를 64에서 128로
+    def __init__(self, directory, n=100000, canvas_size=128, #canvas_size를 64에서 128로
                  train=True, transform=None):
         np_file = 'sprites_{}_{}.npz'.format(n, canvas_size)
         full_path = os.path.join(directory, np_file)

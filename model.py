@@ -4,9 +4,12 @@
 import torch
 import torch.nn as nn
 import torch.distributions as dists
-
 import torchvision
 
+device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+#MONet
 
 def double_conv(in_channels, out_channels):
     return nn.Sequential(
@@ -17,8 +20,6 @@ def double_conv(in_channels, out_channels):
         nn.BatchNorm2d(out_channels),
         nn.ReLU(inplace=True)
     )
-
-device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class UNet(nn.Module):
     def __init__(self):
@@ -132,7 +133,6 @@ class UNet(nn.Module):
         
         return x
 
-
 class AttentionNet(nn.Module):
     def __init__(self, conf):
         super().__init__()
@@ -212,7 +212,6 @@ class DecoderNet(nn.Module):
         result = self.convs(inp)
         return result
 
-
 class Monet(nn.Module):
     def __init__(self, conf, height, width):
         super().__init__()
@@ -226,6 +225,7 @@ class Monet(nn.Module):
     def forward(self, x):
         scope = torch.ones_like(x[:, 0:1])
         masks = []
+        zs=[] #...............latent vector 모음 (constellation을 위해 추가)
         for i in range(self.conf.num_slots-1):
             mask, scope = self.attention(x, scope)
             masks.append(mask)
@@ -237,6 +237,7 @@ class Monet(nn.Module):
         kl_zs = torch.zeros_like(loss)
         for i, mask in enumerate(masks):
             z, kl_z = self.__encoder_step(x, mask)
+            zs.append(z) #............latent vector 모음 (constellation을 위해 추가)
             sigma = self.conf.bg_sigma if i == 0 else self.conf.fg_sigma
             p_x, x_recon, mask_pred = self.__decoder_step(x, z, mask, sigma)
             mask_preds.append(mask_pred)
@@ -245,8 +246,10 @@ class Monet(nn.Module):
             kl_zs += kl_z
             full_reconstruction += mask * x_recon
 
+        zs=torch.stack(zs,1) #...........latent vector 모음 차원 합치기
+
         # masks 리스트를 그대로 tensor로 concat하기 전 상태로 저장
-        masks_list = masks.copy()        
+        masks_list = masks.copy()
 
         masks = torch.cat(masks, 1)
         tr_masks = masks.permute(0, 2, 3, 1)
@@ -254,14 +257,14 @@ class Monet(nn.Module):
         q_masks_recon = dists.Categorical(logits=torch.stack(mask_preds, 3))
         kl_masks = dists.kl_divergence(q_masks, q_masks_recon)
         kl_masks = torch.sum(kl_masks, [1, 2])
-        # print('px', p_xs.mean().item(),
-        #       'kl_z', kl_zs.mean().item(),
-        #       'kl masks', kl_masks.mean().item())
+
         loss += self.gamma * kl_masks
         return {'loss': loss,
                 'masks': masks,           # 합쳐진 마스크 (B, K, H, W)
                 'masks_list': masks_list, # 합치기 전 리스트 (각 요소: (B,1,H,W))
-                'reconstructions': full_reconstruction}
+                'reconstructions': full_reconstruction,
+                'zs': zs #........latent vector 모음
+                }
 
 
     def __encoder_step(self, x, mask):
@@ -288,9 +291,381 @@ class Monet(nn.Module):
         return p_x, x_recon, mask_pred
 
 
-def print_image_stats(images, name):
-    print(name, '0 min/max', images[:, 0].min().item(), images[:, 0].max().item())
-    print(name, '1 min/max', images[:, 1].min().item(), images[:, 1].max().item())
-    print(name, '2 min/max', images[:, 2].min().item(), images[:, 2].max().item())
+#필요없을거같은데 지워,,
+# def print_image_stats(images, name):
+#     print(name, '0 min/max', images[:, 0].min().item(), images[:, 0].max().item())
+#     print(name, '1 min/max', images[:, 1].min().item(), images[:, 1].max().item())
+#     print(name, '2 min/max', images[:, 2].min().item(), images[:, 2].max().item())
 
 
+
+#SCAN (train시키는 코드 필요)
+class BVAE(nn.Module): #학습 시 scan의 이미지 처리 단(beta VAE)
+    def __init__(self, input_size, hidden_size, output_size):
+        super(BVAE, self).__init__()
+        self.output_size = output_size
+        self.encoder = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, output_size * 2)  # 인코더가 뽑아야 할 output이 두개 (mu(평균), logvar(분산))
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(output_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, input_size),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        encoder_output = self.encoder(x)
+        mu, logvar = encoder_output[:, :self.output_size], encoder_output[:, self.output_size:]
+        z = mu + torch.randn_like(torch.exp(0.5 * logvar)) #sigma=root(var)=root(exp(log(var))) ->양수로 만들기 위해서 =exp(0.5*log(var))
+        recon_x = self.decoder(z)
+        return recon_x, mu, logvar
+
+    def compute_loss(self, x, recon_x, mu, logvar, dae, beta):
+        z_d = dae.encode(x)
+        recon_z_d = dae.encode(recon_x)
+        delta = z_d - recon_z_d
+        L2_loss = 0.5 * torch.sum(delta * delta)
+        KLD_loss = -0.5 * beta * torch.sum(1 + logvar - mu * mu - logvar.exp())
+        return L2_loss, KLD_loss
+
+class DAE(nn.Module): #denoising autoencoder, noise를 제거하는 VAE로 Beta VAE 학습 과정에서 오차 보정을 위해 사용.
+    def __init__(self, input_size, hidden_size, output_size):
+        super(DAE, self).__init__()
+        self.encoder = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ELU(inplace=False),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ELU(inplace=False),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ELU(inplace=False),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ELU(inplace=False)
+        )
+
+        self.fc1 = nn.Linear(hidden_size, output_size)
+        self.fc2 = nn.Linear(output_size, hidden_size)
+
+        self.decoder = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ELU(inplace=False),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ELU(inplace=False),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ELU(inplace=False),
+            nn.Linear(hidden_size, input_size),
+            nn.Sigmoid()
+        )
+
+        self.elu = nn.ELU(inplace=False)
+        self.tanh = nn.Tanh()
+
+    def encode(self, x):
+        h = self.encoder(x)
+        z = self.tanh(self.fc1(h))
+        return z
+
+    def decode(self, z):
+        h = self.elu(self.fc2(z))
+        out = self.decoder(h)
+        return out
+
+    def forward(self, x):
+        z = self.encode(x)
+        out = self.decode(z)
+        return out
+
+    def compute_loss(self, x_org, x_out):
+        delta = x_org - x_out
+        reconstr_loss = 0.5 * torch.sum(delta * delta)
+        return reconstr_loss
+
+class SCAN(nn.Module): #학습시 라벨 입력 단이자 scan 모델에서 최종적으로 학습시켜야 하는 것. 나중에 추론 및 생성에서 이 부분 이용.
+    def __init__(self, input_size, hidden_size, output_size):
+        super(SCAN, self).__init__()
+        self.output_size = output_size
+        self.encoder = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, output_size * 2)  # 인코더가 뽑아야 할 output이 두개
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(output_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, input_size),
+            nn.Sigmoid()
+        )
+
+    def forward(self, y):
+        encoder_output = self.encoder(y)
+        mu, logvar = encoder_output[:, :self.output_size], encoder_output[:, self.output_size:]
+        logvar = torch.clamp(logvar, min=-10, max=10) #NaN값 나오는 이슈 방지
+        z = mu + torch.randn_like(torch.exp(0.5 * logvar))
+        out_y = self.decoder(z)
+        return z, out_y, mu, logvar
+
+    def compute_loss(self, x, y, target, mu, logvar, x_mu, x_logvar, lambd=10.0):
+        reconstr_loss = nn.BCELoss()(y, target) #loss function 바꿔봄
+        KLD_loss_1 = -0.5 * torch.sum(1 + logvar - mu * mu - logvar.exp())
+        KLD_loss_2 = -lambd * self._kl(x_mu, x_logvar, mu, logvar) #.................beta는 설정안하나????
+        return reconstr_loss, KLD_loss_1, KLD_loss_2
+
+    def _kl(self, mu1, logvar1, mu2, logvar2):
+        mu = mu1 - mu2
+        return torch.sum(0.5 * (logvar2 - logvar1 + (logvar1.exp() - logvar2.exp()) + mu * mu / logvar2.exp() - 1))
+
+class Recombinator(nn.Module): 
+    def __init__(self, input_size, hidden_size, output_size):
+        super(Recombinator, self).__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        self.hidden_size = hidden_size
+        self.conv = nn.Sequential(
+            nn.Conv1d(4, 1024, 1), #mu0, logvar0, mu1, logvar1
+            nn.ReLU(),
+            nn.Conv1d(1024, 6, 1) #.........앞에 3개평균내서 r_mu, 뒤에 3개 평균내서 r_logvar로 쓰던데 왜 3개씩일까
+        )
+
+    def recombine(self, mu0, logvar0, mu1, logvar1):
+        z_stacked = torch.stack([mu0, mu1, logvar0, logvar1], 1)
+        return z_stacked
+
+    def reparameterize(self, mu, logvar): #주어진 평균과 분산을 이용하여 정규분포에서 샘플링된 latent 벡터 z 생성
+        std = logvar.mul(0.5).exp_()
+        eps = Variable(std.data.new(std.size()).normal_())
+        return eps.mul(std).add_(mu)
+
+    def forward(self, mu0, logvar0, mu1, logvar1):
+        z_stacked = self.recombine(mu0, logvar0, mu1, logvar1)
+        h = self.conv(z_stacked)
+        mu, logvar = torch.split(h, 3, 1)
+        r_mu = torch.mean(mu, 1)  # 평균 사용으로 결합
+        r_logvar = torch.mean(logvar, 1)  # 평균 사용으로 결합
+        r_z = self.reparameterize(r_mu, r_logvar)
+        return r_z, r_mu, r_logvar
+
+    def compute_loss(self, r_mu, r_logvar, x_mu, x_logvar, y_mu, y_logvar):
+        symbol_loss = self._kl(y_mu, y_logvar, r_mu, r_logvar) #...forward kl 아마도.,?
+        return _, symbol_loss
+
+    def _kl(self, mu1, logvar1, mu2, logvar2):
+        mu = mu1 - mu2
+        return torch.sum(0.5 * (logvar2 - logvar1 + (logvar1 - logvar2).exp() + torch.mul(mu, mu) / logvar2.exp() - 1))
+
+
+#GNN,
+class RelationalGNN(nn.Module):
+    def __init__(self, input_dim, hidden_dim, r_dim, num_slots):
+        super(RelationalGNN, self).__init__()
+        self.conv1 = GCNConv(input_dim, hidden_dim)
+        self.conv2 = GCNConv(hidden_dim, hidden_dim)
+        self.fc_mu = nn.Linear(hidden_dim, r_dim)
+        self.fc_logvar = nn.Linear(hidden_dim, r_dim)
+        self.r_dim = r_dim
+        self.hidden_dim = hidden_dim
+        self.num_slots = num_slots
+        self.global_mlp = nn.Sequential(
+            nn.Linear(num_slots * hidden_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, hidden_dim)
+        ).to(device)
+
+
+    def forward(self, x, edge_index):
+        batch_size, num_slots, features = x.shape
+
+        x = self.conv1(x, edge_index)
+        x = torch.relu(x)
+        x = self.conv2(x, edge_index)
+        x = torch.relu(x)
+        x = x.view(batch_size, num_slots, self.hidden_dim) #기존 코드에서 r_dim = hidden_dim이라 운좋게 돌아갔던 부분
+
+        x = x.view(batch_size, -1)
+        global_info = self.global_mlp(x)
+
+        mu_q = self.fc_mu(global_info)
+        logvar_q = self.fc_logvar(global_info)
+        return mu_q, logvar_q
+
+# LSTM
+class SequentialLSTM(nn.Module):
+    def __init__(self, r_dim, hidden_dim, latent_dim, num_slots):
+        super(SequentialLSTM, self).__init__()
+        self.lstm_cell = nn.LSTMCell(r_dim, hidden_dim)
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)  # mu 추출
+        self.fc_logvar = nn.Linear(hidden_dim, latent_dim)  # logvar 추출
+        self.num_slots = num_slots
+
+    def forward(self, r):
+        batch_size, r_dim = r.size()
+        h_t, c_t = self.init_hidden(batch_size)
+
+        mu_outputs = []
+        logvar_outputs = []
+        for i in range(self.num_slots):
+            h_t, c_t = self.lstm_cell(r, (h_t, c_t))  # 각 슬롯에 대해 LSTM 처리
+            mu_i = self.fc_mu(h_t)  # mu 추출
+            logvar_i = self.fc_logvar(h_t)  # logvar 추출
+            mu_outputs.append(mu_i)
+            logvar_outputs.append(logvar_i)
+
+        # [batch_size, num_slots, latent_dim] 형태로 출력 쌓기
+        mu_outputs = torch.stack(mu_outputs, dim=1)
+        logvar_outputs = torch.stack(logvar_outputs, dim=1)
+        return mu_outputs, logvar_outputs
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def init_hidden(self, batch_size):
+        h = torch.zeros(batch_size, self.lstm_cell.hidden_size).to(r.device)
+        c = torch.zeros(batch_size, self.lstm_cell.hidden_size).to(r.device)
+        return h, c
+
+
+#Constellation
+class Constellation(nn.Module):
+    def __init__(self, conf, monet, input_dim, hidden_dim, output_dim, latent_dim, r_dim, height, width):
+        super(Constellation, self).__init__()
+        self.monet = monet
+        self.gnn = RelationalGNN(latent_dim, hidden_dim, r_dim, conf.num_slots)
+        self.lstm = SequentialLSTM(r_dim, hidden_dim, latent_dim, conf.num_slots)
+        #o에서 위치 추출 a 위한 pre trained mask 정의. gpt는 추가 loss function 없이 알아서 위치 추출을 하도록 학습된다고 주장하지만 확인 필요할 것으로 보임
+        self.mask_extractor = nn.Sequential(
+            nn.Conv1d(conf.num_slots, 16, 3, padding=1), #차원 이슈 해결
+            nn.ReLU(),
+            nn.Conv1d(16, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(32, 1, 1),
+            nn.Softmax(dim=2)
+        )
+    
+    
+    def encode(self, x):
+        monet_output = self.monet(x)
+        masks = monet_output['masks']
+        recon = monet_output['reconstructions']
+        o = monet_output['zs']
+        batch_size = o.shape[0]
+        learned_mask = self.mask_extractor(o)
+
+        a = o * learned_mask
+
+        residue = o * (1 - learned_mask)
+        num_nodes = o.shape[1]
+        edge_index = self.create_fully_connected_edge_index(num_nodes)
+        edge_index = edge_index.to(device)
+        mu_q, logvar_q = self.gnn(a, edge_index)
+        r = self.lstm.reparameterize(mu_q, logvar_q)
+        return r, mu_q, logvar_q, a, o, learned_mask, recon, residue
+
+    def decode(self, r):
+        mu_outputs, logvar_outputs = self.lstm(r)
+        recon = self.lstm.reparameterize(mu_outputs, logvar_outputs)
+        return recon, mu_outputs, logvar_outputs
+
+    #edge index 생성 함수. 단순한 fully connect이기에 가중치 개념 추가할 필요 있을 가능성 높음
+    def create_fully_connected_edge_index(self, num_nodes):
+        edge_index = list(itertools.permutations(range(num_nodes), 2))
+        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        return edge_index
+
+class LossFunctions(nn.Module):
+    def __init__(self, conf, beta=4, gamma_init=0.1, latent_dim=16):
+        super(LossFunctions, self).__init__()
+        self.beta = beta
+        self.gamma = nn.Parameter(torch.tensor([gamma_init] * conf.num_slots * latent_dim))
+
+    # 논문에 나온 손실 함수 구현
+    def reconstruction_loss(self, ai, a_hat):
+        loss = 0.0
+        batch_size, num_slots, latent_dim = ai.size()
+
+        for b in range(batch_size):
+            # 각 배치에 대해 cost_matrix를 생성
+            cost_matrix = np.zeros((num_slots, num_slots))
+            for i in range(num_slots):
+                for j in range(num_slots):
+                    cost_matrix[i, j] = np.linalg.norm(ai[b, i].detach().cpu().numpy() - a_hat[b, j].detach().cpu().numpy())
+
+            # Hungarian matching (linear_sum_assignment) 적용
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+            # 매칭된 슬롯 쌍에 대해 재구성 손실 계산
+            for i, j in zip(row_ind, col_ind):
+                loss += 0.5 * torch.norm(ai[b, i] - a_hat[b, j]) ** 2
+
+        return loss
+
+    def kl_divergence(self, mu_q, logvar_q, mu_p=None, logvar_p=None):
+        if mu_p is None or logvar_p is None:
+            mu_p = torch.zeros_like(mu_q)
+            logvar_p = torch.zeros_like(logvar_q)
+        kld = -0.5 * torch.sum(1 + logvar_q - logvar_p - ((mu_q - mu_p)**2 + torch.exp(logvar_q)) / torch.exp(logvar_p))
+        return kld
+
+    def mask_entropy_loss(self, learned_mask):
+        # 배치와 슬롯 차원을 모두 포함하여 손실 계산
+        loss = -torch.sum(learned_mask * torch.log(learned_mask + 1e-10))
+        return loss
+
+    def conditioning_loss(self, o, a_hat, learned_mask):
+        loss = 0.0
+        batch_size, num_slots, latent_dim = o.size()
+
+        # learned_mask의 차원을 num_slots에 맞춰서 반복 (batch_size, num_slots, latent_dim)
+        learned_mask = learned_mask.repeat(1, num_slots, 1)
+
+        for b in range(batch_size):
+            cost_matrix = np.zeros((num_slots, num_slots))
+
+            # 각 배치 내에서 o와 a_hat 간의 cost_matrix 계산
+            for i in range(num_slots):
+                for j in range(num_slots):
+                    cost_matrix[i, j] = np.linalg.norm(
+                        o[b, i].detach().cpu().numpy() - a_hat[b, j].detach().cpu().numpy() / learned_mask[b, j].detach().cpu().numpy()
+                    )
+
+            # Hungarian matching (linear_sum_assignment) 적용
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+            # 매칭된 쌍에 대해 손실 계산
+            for i, j in zip(row_ind, col_ind):
+                l_rec_star = 0.5 * torch.sum((o[b, i] - a_hat[b, j] / learned_mask[b, j]) ** 2)
+                gamma_j = self.gamma[j]  # 학습 가능한 gamma 변수
+                loss += torch.sum((1 - learned_mask[b, j]) * torch.abs(l_rec_star - gamma_j))
+
+        return loss
+
+    def reordering_loss(self, a_hat):
+        loss = 0.0
+        batch_size, num_slots, latent_dim = a_hat.size()
+
+        # 각 배치 내에서 인접한 슬롯들의 차이를 계산
+        for b in range(batch_size):
+            for i in range(1, num_slots):
+                loss += torch.norm(a_hat[b, i] - a_hat[b, i - 1]) ** 2
+
+        return loss
+
+    def total_loss(self, ai, a_hat, mu_q, logvar_q, o, learned_mask):
+        L_rec = self.reconstruction_loss(ai, a_hat)
+        L_kl = self.beta * self.kl_divergence(mu_q, logvar_q)
+        L_entropy = self.mask_entropy_loss(learned_mask)
+        L_condition = self.conditioning_loss(o, a_hat, learned_mask)
+        L_reorder = self.reordering_loss(a_hat)
+
+        L_total = L_rec + L_reorder + L_kl + L_entropy + L_condition
+        return L_total

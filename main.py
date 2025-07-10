@@ -186,7 +186,7 @@ def visualize_masks(images, masks, reconstructions, masks_list=None, save_dir='.
         if masks_list is not None:
             # masks_list는 [num_slots][batch, C, H, W] 형태라 가정
             num_slots = len(masks_list)
-            for slot_idx in range(num_slots):  # 최대 3개 슬롯만 표시 (3열) -> 없앳다 min(num_slots,3)이었는데 수정함ㅋ
+            for slot_idx in range(num_slots): 
                 slot_mask = masks_list[slot_idx][i].sum(axis=0)  # 채널 축 합쳐서 (H,W)로
                 axs[1, slot_idx].imshow(slot_mask)
                 axs[1, slot_idx].set_title(f'Mask {slot_idx}')
