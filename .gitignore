@@ -5,3 +5,6 @@ images/
 wandb/
 README.md
 requirements.txt*.npz
+*.npz
+*.pt
+*.h5*.npz
