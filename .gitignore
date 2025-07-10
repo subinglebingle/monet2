@@ -4,4 +4,4 @@ data/
 images/
 wandb/
 README.md
-requirements.txt
+requirements.txt*.npz
