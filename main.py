@@ -30,8 +30,8 @@ def numpify(tensor):
     return tensor.cpu().detach().numpy()
 
 def run_training(monet, conf, trainloader):
-    os.makedirs(os.path.dirname(conf.checkpoint_file), exist_ok=True) #여기랑 다음줄까지,,,,,,,,ㅜㅜ
-    checkpoint_dir = './checkpoints'
+    os.makedirs(os.path.dirname(conf.checkpoint_dir), exist_ok=True) #여기랑 다음줄까지,,,,,,,,ㅜㅜ
+    #checkpoint_dir = './checkpoints'
     if conf.load_parameters and os.path.isfile(conf.checkpoint_file):
         monet.load_state_dict(torch.load(conf.checkpoint_file))
         print('Restored parameters from', conf.checkpoint_file)

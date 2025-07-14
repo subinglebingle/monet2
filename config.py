@@ -11,11 +11,12 @@ config_options = [
     'num_epochs',
     'load_parameters',  # Load parameters from checkpoint
     'checkpoint_file',  # File for loading/storing checkpoints
+    'checkpoint_dir', #내가 추가... checkpoints들 저장할 파일
     'data_dir',  # Directory for the training data
     'parallel',  # Train using nn.DataParallel
     # Model config
     'num_slots',  # Number of slots k,
-    'num_blocks',  # Number of blochs in attention U-Net 
+    'num_blocks',  # Number of blocks in attention U-Net 
     'channel_base',  # Number of channels used for the first U-Net conv layer
     'bg_sigma',  # Sigma of the decoder distributions for the first slot
     'fg_sigma',  # Sigma of the decoder distributions for all other slots
@@ -29,7 +30,8 @@ sprite_config = MonetConfig(vis_every=50, #몇개마다 visualization할건지
                             batch_size=64, #논문: 64
                             num_epochs=20, #논문에서는 500000 iteration 진행 -> batch_size 64면 epoch=64
                             load_parameters=True,
-                            checkpoint_file='./checkpoints/sprites.ckpt',
+                            checkpoint_file='./checkpoints/sprites.ckpt', #나중에 없애는게 목표
+                            checkpoint_dir='./checkpoints',
                             data_dir='./data/',
                             parallel=True,
                             num_slots=9, #constellation dataset에 맞춰서 늘림

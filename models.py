@@ -1,10 +1,15 @@
 # License: MIT
 # Author: Karl Stelzner
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.distributions as dists
 import torchvision
+
+from torch_geometric.nn import GCNConv
+from scipy.optimize import linear_sum_assignment
+import itertools
 
 device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -201,7 +206,7 @@ class DecoderNet(nn.Module):
         )
         ys = torch.linspace(-1, 1, self.height + 8)
         xs = torch.linspace(-1, 1, self.width + 8)
-        ys, xs = torch.meshgrid(ys, xs)
+        ys, xs = torch.meshgrid(ys, xs, indexing='xy')
         coord_map = torch.stack((ys, xs)).unsqueeze(0)
         self.register_buffer('coord_map_const', coord_map)
 
@@ -442,7 +447,8 @@ class Recombinator(nn.Module):
 
     def reparameterize(self, mu, logvar): #주어진 평균과 분산을 이용하여 정규분포에서 샘플링된 latent 벡터 z 생성
         std = logvar.mul(0.5).exp_()
-        eps = Variable(std.data.new(std.size()).normal_())
+        #eps = Variable(std.data.new(std.size()).normal_())
+        eps = torch.randn_like(std)
         return eps.mul(std).add_(mu)
 
     def forward(self, mu0, logvar0, mu1, logvar1):
@@ -463,7 +469,7 @@ class Recombinator(nn.Module):
         return torch.sum(0.5 * (logvar2 - logvar1 + (logvar1 - logvar2).exp() + torch.mul(mu, mu) / logvar2.exp() - 1))
 
 
-#GNN,
+#GNN
 class RelationalGNN(nn.Module):
     def __init__(self, input_dim, hidden_dim, r_dim, num_slots):
         super(RelationalGNN, self).__init__()
@@ -508,7 +514,7 @@ class SequentialLSTM(nn.Module):
 
     def forward(self, r):
         batch_size, r_dim = r.size()
-        h_t, c_t = self.init_hidden(batch_size)
+        h_t, c_t = self.init_hidden(batch_size, r.device)
 
         mu_outputs = []
         logvar_outputs = []
@@ -529,9 +535,9 @@ class SequentialLSTM(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def init_hidden(self, batch_size):
-        h = torch.zeros(batch_size, self.lstm_cell.hidden_size).to(r.device)
-        c = torch.zeros(batch_size, self.lstm_cell.hidden_size).to(r.device)
+    def init_hidden(self, batch_size,device):
+        h = torch.zeros(batch_size, self.lstm_cell.hidden_size, device=device)
+        c = torch.zeros(batch_size, self.lstm_cell.hidden_size, device=device)
         return h, c
 
 
@@ -550,8 +556,7 @@ class Constellation(nn.Module):
             nn.ReLU(),
             nn.Conv1d(32, 1, 1),
             nn.Softmax(dim=2)
-        )
-    
+        )    
     
     def encode(self, x):
         monet_output = self.monet(x)
