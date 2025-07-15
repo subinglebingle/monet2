@@ -1,6 +1,5 @@
 from torch.utils.data import Dataset
 import os
-
 import torch
 import torch.nn as nn
 import torchvision
@@ -8,8 +7,6 @@ import torchvision.transforms as transforms
 import torch.optim as optim
 import numpy as np
 import visdom
-
-import os
 
 import models
 import datasets
@@ -19,15 +16,15 @@ import matplotlib.pyplot as plt
 import wandb
 wandb.init(project="Constellation")
 #-----------------------------------------------------------------------------------------------------------------------------------
-input_dim = 262144 #차원 맞추기(16*128*128)
+input_dim = 262144 #차원 맞추기(16*128*128) 
 hidden_dim = 128
 output_dim = 64
 latent_dim = 16
-r_dim = 16
+r_dim = 16 #input_dim을 r_dim으로 차원 축소(인코더를 통해)
 height = 128  # Height of the input image
 width = 128  # Width of the input image
-num_epochs = 30
-batch_size = 64
+# num_epochs = 30
+# batch_size = 64
 
 conf = config.sprite_config
 #임시로 만든 하이퍼파라미터와 설정값들. 상황에 따라 유동적인 변경 가능
@@ -142,7 +139,6 @@ def train_dae(dae, data, optimizer): #data가 constellation.encode에서 나오�
     loss.backward()
     optimizer.step()
 
-    
     wandb.log({"Loss/train_dae": loss.item, "epoch": epoch}) #wandb 기록
 
 
@@ -159,9 +155,7 @@ def train_bvae(dae, bvae, data, optimizer):
     loss.backward()
     optimizer.step()
 
-    #writer.add_scalar('Loss/train_bvae', loss.item(), epoch) #텐서보드 기록
     wandb.log({"Loss/train_bvae": loss.item(), "epoch": epoch}) #wandb기록
-
 
 
 def train_scan(bvae, scan, data, label, optimizer):
@@ -180,8 +174,8 @@ def train_scan(bvae, scan, data, label, optimizer):
     torch.nn.utils.clip_grad_norm_(scan.parameters(), max_norm=1.0) #기울기 폭발 막기 위한 클리핑
     optimizer.step()
 
-    #writer.add_scalar('Loss/train_scan', loss.item(), epoch) #텐서보드 기록
     wandb.log({"Loss/train": loss.item(), "epoch": epoch}) #wandb기록
+
 
 def train_recomb(dae, bvae, scan, recomb, data, label, in_label, optimizer, begin_epoch=0, training_epochs=100, display_epoch=1, save_epoch=10):
     recomb.train()
@@ -217,24 +211,25 @@ def train_recomb(dae, bvae, scan, recomb, data, label, in_label, optimizer, begi
     loss.backward()
     optimizer.step()
 
-    #writer.add_scalar('Loss/train_recombinator', loss.item(), epoch) #텐서보드 기록
     wandb.log({"Loss/train_recombinator": loss.item(), "epoch": epoch}) #wandb기록
 
-def process_labels(batch_labels, word_to_idx, num_classes):
+num_classes=379
+
+def process_labels(batch_labels, num_classes): #def process_labels(batch_labels, word_to_idx, num_classes):
     batch_size = batch_labels.size(0)  # 배치 크기 추출
     num_labels = batch_labels.size(1)  # 각 배치의 라벨 개수 추출
 
     indices = torch.zeros(batch_size, num_labels, dtype=torch.long, device=batch_labels.device)
 
-    # 각 배치의 라벨을 인덱스로 변환
-    for i in range(batch_size):
-        for j in range(num_labels):
-            label = int(batch_labels[i, j].item())  # 라벨 값을 정수형으로 변환
-            if label in word_to_idx:
-                indices[i, j] = word_to_idx[label]  # word_to_idx에서 인덱스 가져오기
-            else:
-                print(f"Warning: Label {label} not found in word_to_idx.")
-                indices[i, j] = 0  # 기본값으로 0 추가
+    # # 각 배치의 라벨을 인덱스로 변환
+    # for i in range(batch_size):
+    #     for j in range(num_labels):
+    #         label = int(batch_labels[i, j].item())  # 라벨 값을 정수형으로 변환
+    #         if label in word_to_idx:
+    #             indices[i, j] = word_to_idx[label]  # word_to_idx에서 인덱스 가져오기
+    #         else:
+    #             print(f"Warning: Label {label} not found in word_to_idx.")
+    #             indices[i, j] = 0  # 기본값으로 0 추가
 
     # 멀티핫 인코딩을 위한 빈 벡터 생성 (배치마다 생성)
     one_hot_labels = torch.zeros(batch_size, num_classes, device=indices.device, dtype=torch.float)
@@ -244,53 +239,52 @@ def process_labels(batch_labels, word_to_idx, num_classes):
 
     return one_hot_labels
 
-word_to_idx = {
-    # x_pos 라벨 (수평 위치)
-    0: -1.0, #x_pos, y_pos 계산 중에 0으로 나와야 하는 라벨이 -1이 되는 가능성이 존재함. 이미 학습된 체크포인트를 어찌 할 수 없어 조치함
-    0: 0.0,  # 왼쪽 (Left)
-    1: 1.0,  # 왼쪽 중앙 (Left-centre)
-    2: 2.0,  # 중앙 (Centre)
-    3: 3.0,  # 오른쪽 중앙 (Right-centre)
-    4: 4.0,  # 오른쪽 (Right)
+# word_to_idx = {
+#     # x_pos 라벨 (수평 위치)
+#     0: -1.0, #x_pos, y_pos 계산 중에 0으로 나와야 하는 라벨이 -1이 되는 가능성이 존재함. 이미 학습된 체크포인트를 어찌 할 수 없어 조치함
+#     0: 0.0,  # 왼쪽 (Left)
+#     1: 1.0,  # 왼쪽 중앙 (Left-centre)
+#     2: 2.0,  # 중앙 (Centre)
+#     3: 3.0,  # 오른쪽 중앙 (Right-centre)
+#     4: 4.0,  # 오른쪽 (Right)
 
-    # y_pos 라벨 (수직 위치)
-    5: -1.0, #역시 비슷한 사유
-    5: 0.0,  # 아래 (Bottom)
-    6: 1.0,  # 아래 중앙 (Bottom-middle)
-    7: 2.0,  # 중앙 (Middle)
-    8: 3.0,  # 위쪽 중앙 (Top-middle)
-    9: 4.0,  # 위쪽 (Top)
+#     # y_pos 라벨 (수직 위치)
+#     5: -1.0, #역시 비슷한 사유
+#     5: 0.0,  # 아래 (Bottom)
+#     6: 1.0,  # 아래 중앙 (Bottom-middle)
+#     7: 2.0,  # 중앙 (Middle)
+#     8: 3.0,  # 위쪽 중앙 (Top-middle)
+#     9: 4.0,  # 위쪽 (Top)
 
-    # num_sprites 라벨 (스프라이트 개수)
-    10: 4.0,  # 4개의 스프라이트
-    11: 5.0,  # 5개의 스프라이트
-    12: 6.0,  # 6개의 스프라이트
-    13: 7.0,  # 7개의 스프라이트
+#     # num_sprites 라벨 (스프라이트 개수)
+#     10: 4.0,  # 4개의 스프라이트
+#     11: 5.0,  # 5개의 스프라이트
+#     12: 6.0,  # 6개의 스프라이트
+#     13: 7.0,  # 7개의 스프라이트
 
-    # curviness 라벨 (곡률)
-    14: 0.0,  # 직선 (Straight)
-    15: 1.0,  # 굽은 선 (Bend)
-    16: 2.0,  # 아치형 (Arch)
-    17: 3.0,  # 말굽형 (Horseshoe)
-    18: 4.0,  # 원형 (Circle)
+#     # curviness 라벨 (곡률)
+#     14: 0.0,  # 직선 (Straight)
+#     15: 1.0,  # 굽은 선 (Bend)
+#     16: 2.0,  # 아치형 (Arch)
+#     17: 3.0,  # 말굽형 (Horseshoe)
+#     18: 4.0,  # 원형 (Circle)
 
-    # orientation 라벨 (회전 각도)
-    # 각도 값은 0 ~ 360 범위 내에서 그대로 사용
-}
+#     # orientation 라벨 (회전 각도)
+#     # 각도 값은 0 ~ 360 범위 내에서 그대로 사용
+# }
 
-# 각도를 위한 word_to_idx에 추가
-for angle in range(0, 360):
-    word_to_idx[angle+19] = float(angle)  # 곡률 19~379까지 그대로 사용
+# # 각도를 위한 word_to_idx에 추가
+# for angle in range(0, 360):
+#     word_to_idx[angle+19] = float(angle)  # 곡률 19~379까지 그대로 사용
 
-
-num_classes = len(word_to_idx) #19+360
-
+# num_classes = len(word_to_idx) #19+360
+num_classes=379
 
 # Transform 적용 
 # transforms.Compose(): 여러개의 전처리(transform)을 순차적으로 묶어서 한번에 적용해줌
 transform = transforms.Compose([ 
     transforms.ToTensor(),
-     transforms.Lambda(lambda x: x.float())
+    transforms.Lambda(lambda x: x.float())
 ])
 
 #데이터셋 있으면 있는거 사용, 없으면 make_sprites
@@ -333,6 +327,7 @@ if os.path.isfile(pt_path):
     model.load_state_dict(torch.load(pt_path))
     print(f'Restored Constellation parameters from {pt_path}')
 else: #없으면 train constellation
+    print('Start training Constellation...')
     for epoch in range(num_epochs): #constellation 루프
         for batch in data_loader:
             x, _ = batch
@@ -356,11 +351,7 @@ else: #없으면 train constellation
             wandb.log({"Loss/train_constellation": loss.item(), "epoch": epoch}) #wandb기록
 
         print(f'Epoch {epoch+1}/{num_epochs}, Constellation Loss: {loss.item()}')
-
-    torch.save(
-        {'constellation_model_state_dict': model.state_dict()},
-        './checkpoints/constellation.pt'
-    )
+        torch.save({'constellation_model_state_dict': model.state_dict()},'./checkpoints/constellation.pt')
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
@@ -375,6 +366,7 @@ if os.path.isfile(pt_path):
     model.load_state_dict(torch.load(pt_path))
     print(f'Restored Dae parameters from {pt_path}')
 else: #없으면 train dae
+    print('Start training DAE...')
     for epoch in range(num_epochs): #dae 루프
         for batch in data_loader:
             x, _ = batch
@@ -388,11 +380,7 @@ else: #없으면 train dae
             train_dae(dae, r.detach(), optimizer_dae)
 
         print(f'Dae Epoch {epoch+1}/{num_epochs}')
-
-    torch.save(
-        {'dae_model_state_dict': dae.state_dict()},
-        './checkpoints/dae.pt'
-    )
+        torch.save({'dae_model_state_dict': dae.state_dict()},'./checkpoints/dae.pt')
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
@@ -409,6 +397,7 @@ if os.path.isfile(pt_path):
     model.load_state_dict(torch.load(pt_path))
     print(f'Restored Bvae parameters from {pt_path}')
 else: #없으면 train bvae
+    print('Start training BVAE...')
     for epoch in range(num_epochs): # bvae 루프
         for batch in data_loader:
             x, _ = batch
@@ -422,11 +411,7 @@ else: #없으면 train bvae
             train_bvae(dae, bvae, r.detach(), optimizer_bvae)
 
         print(f'Bvae Epoch {epoch+1}/{num_epochs}')
-
-    torch.save(
-        {'bvae_model_state_dict': bvae.state_dict()},
-        './checkpoints/bvae.pt'
-    )
+        torch.save({'bvae_model_state_dict': bvae.state_dict()},'./checkpoints/bvae.pt')
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
@@ -445,10 +430,11 @@ if os.path.isfile(pt_path):
     model.load_state_dict(torch.load(pt_path))
     print(f'Restored SCAN parameters from {pt_path}')
 else: #없으면 train scan
+    print('Start training SCAN...')
     for epoch in range(num_epochs): #scan 루프
         for batch in data_loader:
             x, batch_labels = batch
-            one_hot_labels = process_labels(batch_labels, word_to_idx, num_classes)
+            one_hot_labels = process_labels(batch_labels, num_classes)
             if use_cuda:
                 x = x.cuda()
                 one_hot_labels = one_hot_labels.cuda()
@@ -460,11 +446,7 @@ else: #없으면 train scan
             train_scan(bvae, scan, r.detach(), one_hot_labels, optimizer_scan)
 
         print(f'Scan Epoch {epoch+1}/{num_epochs}')
-
-    torch.save(
-        {'scan_model_state_dict': scan.state_dict()},
-        './checkpoints/scan.pt'
-    )
+        torch.save({'scan_model_state_dict': scan.state_dict()},'./checkpoints/scan.pt')
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
@@ -484,6 +466,7 @@ if os.path.isfile(pt_path):
     model.load_state_dict(torch.load(pt_path))
     print(f'Restored Recombinator parameters from {pt_path}')
 else: #없으면 train recombinator
+    print('Start training Recombinator...')
     for epoch in range(num_epochs):  # 전체 학습 에포크 수
         for batch in data_loader:
             xs, batch_labels = batch  # 입력 데이터와 라벨 로드
@@ -491,18 +474,16 @@ else: #없으면 train recombinator
             r, _, _, _, _, _, _, _ = model.encode(x)
 
             # 라벨 처리 (현재의 ys0와 개입할 ys1 생성)
-            ys0 = process_labels(batch_labels,word_to_idx,num_classes)  # 현재 상태 라벨
-            ys1 = process_labels(batch_labels,word_to_idx,num_classes)  # 개입할 상태 라벨
+            ys0 = process_labels(batch_labels, num_classes)  # 현재 상태 라벨
+            ys1 = process_labels(batch_labels, num_classes)  # 개입할 상태 라벨
             # Recombinator 학습 함수 호출
             train_recomb(dae, bvae, scan, recomb, r, ys0, ys1, optimizer_recomb)
 
         # 에포크 완료 시 로그 출력
         print(f'Epoch {epoch + 1}/{num_epochs} complete for Recombinator')
+        torch.save({'dae_model_state_dict': dae.state_dict()},'./checkpoints/dae.pt')
 
-    torch.save(
-        {'dae_model_state_dict': dae.state_dict()},
-        './checkpoints/dae.pt'
-    )
+print('Train Fin.')
 
 # torch.save({    # 학습 체크포인트 최종 저장
 #     'constellation_model_state_dict': model.state_dict(),

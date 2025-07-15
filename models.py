@@ -15,7 +15,6 @@ device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 #MONet
-
 def double_conv(in_channels, out_channels):
     return nn.Sequential(
         nn.Conv2d(in_channels, out_channels, 3, padding=1),
@@ -419,9 +418,11 @@ class SCAN(nn.Module): #학습시 라벨 입력 단이자 scan 모델에서 최�
         out_y = self.decoder(z)
         return z, out_y, mu, logvar
 
-    def compute_loss(self, x, y, target, mu, logvar, x_mu, x_logvar, lambd=10.0):
+    def compute_loss(self, x, y, target, mu, logvar, x_mu, x_logvar, beta=10.0 ,lambd=1.0): #...beta 없었고 lambd=10이었는데 논문대로 고쳐봄
+        # y, mu, logvar: image
+        # x_mu, x_logvar: label
         reconstr_loss = nn.BCELoss()(y, target) #loss function 바꿔봄
-        KLD_loss_1 = -0.5 * torch.sum(1 + logvar - mu * mu - logvar.exp())
+        KLD_loss_1 = -beta * 0.5 * torch.sum(1 + logvar - mu * mu - logvar.exp())
         KLD_loss_2 = -lambd * self._kl(x_mu, x_logvar, mu, logvar) #.................beta는 설정안하나????
         return reconstr_loss, KLD_loss_1, KLD_loss_2
 
@@ -494,7 +495,7 @@ class RelationalGNN(nn.Module):
         x = torch.relu(x)
         x = self.conv2(x, edge_index)
         x = torch.relu(x)
-        x = x.view(batch_size, num_slots, self.hidden_dim) #기존 코드에서 r_dim = hidden_dim이라 운좋게 돌아갔던 부분
+        x = x.view(batch_size, num_slots, self.hidden_dim)
 
         x = x.view(batch_size, -1)
         global_info = self.global_mlp(x)
@@ -512,7 +513,7 @@ class SequentialLSTM(nn.Module):
         self.fc_logvar = nn.Linear(hidden_dim, latent_dim)  # logvar 추출
         self.num_slots = num_slots
 
-    def forward(self, r):
+    def forward(self, r): #r: representation
         batch_size, r_dim = r.size()
         h_t, c_t = self.init_hidden(batch_size, r.device)
 
@@ -548,7 +549,7 @@ class Constellation(nn.Module):
         self.monet = monet
         self.gnn = RelationalGNN(latent_dim, hidden_dim, r_dim, conf.num_slots)
         self.lstm = SequentialLSTM(r_dim, hidden_dim, latent_dim, conf.num_slots)
-        #o에서 위치 추출 a 위한 pre trained mask 정의. gpt는 추가 loss function 없이 알아서 위치 추출을 하도록 학습된다고 주장하지만 확인 필요할 것으로 보임
+        # gpt는 추가 loss function 없이 알아서 위치 추출을 하도록 학습된다고 주장하지만 확인 필요할 것으로 보임
         self.mask_extractor = nn.Sequential(
             nn.Conv1d(conf.num_slots, 16, 3, padding=1), #차원 이슈 해결
             nn.ReLU(),
@@ -564,7 +565,7 @@ class Constellation(nn.Module):
         recon = monet_output['reconstructions']
         o = monet_output['zs']
         batch_size = o.shape[0]
-        learned_mask = self.mask_extractor(o)
+        learned_mask = self.mask_extractor(o) #.............monet_output의 latent vector만 가지고 mask extractor가 된다고,,?
 
         a = o * learned_mask
 
@@ -581,7 +582,7 @@ class Constellation(nn.Module):
         recon = self.lstm.reparameterize(mu_outputs, logvar_outputs)
         return recon, mu_outputs, logvar_outputs
 
-    #edge index 생성 함수. 단순한 fully connect이기에 가중치 개념 추가할 필요 있을 가능성 높음
+    #완전 연결 edge index 생성 함수.
     def create_fully_connected_edge_index(self, num_nodes):
         edge_index = list(itertools.permutations(range(num_nodes), 2))
         edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()

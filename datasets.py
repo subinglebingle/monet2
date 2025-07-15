@@ -43,7 +43,6 @@ def random_sprite_at_position(x, y):
 
 # Function to generate positions along a line or curve
 def generate_positions(num_sprites, curviness, center, orientation):
-    #theta = np.linspace(0, 2 * np.pi, num_sprites) #0~180도 #.....................................필요없는 코드인듯
     structure_length = 0.65 + 0.05 * (num_sprites-4)
     if curviness == 0:
         # Straight line
@@ -98,7 +97,7 @@ def make_sprites(n=100000, height=128, width=128): #h,w=64 였음 #500000?? 2000
             center = np.random.uniform(0.2, 0.8, size=2)
             if curviness == 0:
                 orientation = np.random.choice(range(0, 180, 5))
-            else: orientation = np.random.choice(range(0, 361, 5))
+            else: orientation = np.random.choice(range(0, 360, 5))
             x_positions, y_positions = generate_positions(num_sprites, curviness, center, orientation)
             if positions_within_bounds(x_positions, y_positions):
                 break
@@ -108,7 +107,7 @@ def make_sprites(n=100000, height=128, width=128): #h,w=64 였음 #500000?? 2000
         x_pos = np.clip(((np.mean(x_positions)-0.2)/0.6)//0.2, 0, 4)  # 0~4 범위로 제한
         y_pos = np.clip(((np.mean(y_positions)-0.2)/0.6)//0.2, 0, 4)  # 0~4 범위로 제한 #라벨로 -1이 자꾸 나오는 이슈 해결
 
-        images[i], labels[i] = renderer.render(sprites) / 255.0, [x_pos, y_pos, num_sprites, curviness, orientation]
+        images[i], labels[i] = renderer.render(sprites) / 255.0, [x_pos, y_pos+5, num_sprites+10, curviness+14, orientation+19]
         if i % 100 == 0:
             progress_bar(i, n)
     images = np.clip(images, 0.0, 1.0)

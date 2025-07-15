@@ -27,14 +27,14 @@ config_options = [
 MonetConfig = namedtuple('MonetConfig', config_options)
 
 sprite_config = MonetConfig(vis_every=50, #몇개마다 visualization할건지
-                            batch_size=64, #논문: 64
-                            num_epochs=20, #논문에서는 500000 iteration 진행 -> batch_size 64면 epoch=64
+                            batch_size=128, #논문: 64
+                            num_epochs=20, #논문에서는 500000 iteration 진행
                             load_parameters=True,
                             checkpoint_file='./checkpoints/sprites.ckpt', #나중에 없애는게 목표
                             checkpoint_dir='./checkpoints',
                             data_dir='./data/',
                             parallel=True,
-                            num_slots=9, #constellation dataset에 맞춰서 늘림
+                            num_slots=8, #constellation dataset에 맞춰서 늘림
                             num_blocks=5,
                             channel_base=128, #64
                             bg_sigma=0.09, #background sigma, 1번째 슬롯에만 쓰이는 파라미터, 잘 조절하면 slot1에 배경색만 나오게된다. (논문: 0.09)

@@ -4,8 +4,9 @@ data/
 images/
 wandb/
 README.md
-requirements.txt*.npz
+requirements.txt
 *.npz
 *.pt
-*.h5*.npz'
+*.h5s
 nohup.out
+*.log

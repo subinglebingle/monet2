@@ -11,7 +11,7 @@ import visdom
 
 import os
 
-import model
+import models
 import datasets
 import config
 
@@ -82,7 +82,7 @@ def sprite_experiment():
     trainloader = torch.utils.data.DataLoader(trainset,
                                               batch_size=conf.batch_size,
                                               shuffle=True, num_workers=2)
-    monet = model.Monet(conf,128, 128).to(device)
+    monet = models.Monet(conf,128, 128).to(device)
     if conf.parallel:
         monet = nn.DataParallel(monet)
     run_training(monet, conf, trainloader)
@@ -100,7 +100,7 @@ def sprite_experiment_test():
     trainloader = torch.utils.data.DataLoader(trainset,
                                               batch_size=conf.batch_size,
                                               shuffle=True, num_workers=2)
-    monet = model.Monet(conf, 128, 128).to(device)
+    monet = models.Monet(conf, 128, 128).to(device)
     if conf.parallel:
         monet = nn.DataParallel(monet)
     run_testing(monet, conf, trainloader)
@@ -201,8 +201,6 @@ def visualize_masks(images, masks, reconstructions, masks_list=None, save_dir='.
         plt.close()
         print(f"Saved visualization to {save_path}")
 
-
-if __name__ == '__main__':
-    sprite_experiment()
-    #test하는 코드 추가!
-    #sprite_experiment_test()
+sprite_experiment()
+#test하는 코드 추가!
+#sprite_experiment_test()
