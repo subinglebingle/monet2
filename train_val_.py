@@ -30,12 +30,6 @@ conf = config.sprite_config
 batch_size = conf.batch_size
 num_epochs = conf.num_epochs
 
-# state_dict = torch.load('./checkpoints/sprites.ckpt')
-# print(list(state_dict.keys())[:30])  # 상위 10개 key 출력
-# state_dict = torch.load('./checkpoints/constellation.ckpt')
-# print(list(state_dict.keys())[:30])  # 상위 10개 key 출력
-# exit()
-
 use_cuda = torch.cuda.is_available()
 device = 'cuda' if use_cuda else 'cpu'
 if use_cuda:
@@ -146,8 +140,27 @@ def train_dae(dae, data, optimizer): #data가 constellation.encode에서 나오�
     loss.backward()
     optimizer.step()
 
-    wandb.log({"Loss/train_dae": loss.item, "epoch": epoch}) #wandb 기록
+    wandb.log({"Loss/train_dae": loss.item(), "epoch": epoch}) #wandb 기록
 
+    return loss.item()
+
+
+def val_dae(dae, val_data):
+    dae.eval()
+
+    torch.manual_seed(42)  # optional: noise 고정
+    noise = torch.randn_like(val_data) * 0.1
+    noised_data = val_data + noise     #noise 제거 학습을 위해 noised 벡터 생성
+
+    if use_cuda:
+        val_data = val_data.cuda()
+        noised_data = noised_data.cuda()
+
+    with torch.no_grad():
+        recon_batch = dae(noised_data)
+        loss = dae.compute_loss(val_data, recon_batch)
+
+    wandb.log({"Loss/val_dae": loss.item(), "epoch": epoch}) #wandb 기록
 
 def train_bvae(dae, bvae, data, optimizer):
     bvae.train()
@@ -164,9 +177,24 @@ def train_bvae(dae, bvae, data, optimizer):
 
     wandb.log({"Loss/train_bvae": loss.item(), "epoch": epoch}) #wandb기록
 
+def val_bvae(dae, bvae, val_data):
+    bvae.eval()
+
+    if use_cuda:
+        val_data = val_data.cuda()
+
+    with torch.no_grad():
+        recon_data, mu, logvar = bvae(val_data)
+        reconstr_loss, latent_loss = bvae.compute_loss(val_data, recon_data, mu, logvar, dae, beta=0.5)  # beta 값을 매개변수로 전달, dae 단 사용처
+        loss = reconstr_loss + latent_loss
+
+    wandb.log({"Loss/val_bvae": loss.item(), "epoch": epoch}) #wandb기록
+
+    return loss.item()
+
 
 def train_scan(bvae, scan, data, label, optimizer):
-    scan.train()
+    scan.eval()
 
     if use_cuda:
         data, label = data.cuda(), label.cuda()
@@ -181,10 +209,31 @@ def train_scan(bvae, scan, data, label, optimizer):
     torch.nn.utils.clip_grad_norm_(scan.parameters(), max_norm=1.0) #기울기 폭발 막기 위한 클리핑
     optimizer.step()
 
-    wandb.log({"Loss/train": loss.item(), "epoch": epoch}) #wandb기록
+    wandb.log({"Loss/train_scan": loss.item(), "epoch": epoch}) #wandb기록
+
+    return loss.item()
 
 
-def train_recomb(dae, bvae, scan, recomb, data, label, in_label, optimizer, begin_epoch=0, training_epochs=100, display_epoch=1, save_epoch=10):
+def val_scan(bvae, scan, val_data, val_label):
+    scan.train()
+
+    if use_cuda:
+        val_data, val_label = val_data.cuda(), val_label.cuda()
+
+    with torch.no_grad():
+        z, y_out, mu, logvar = scan(val_label) #label forwarding.
+
+        _, x_mu, x_logvar = bvae(val_data) #image forwarding. bvae단 사용처
+
+        reconstr_loss, latent_loss0, latent_loss1 = scan.compute_loss(val_data, y_out, val_label, mu, logvar, x_mu, x_logvar)
+        loss = reconstr_loss + latent_loss0 + latent_loss1
+
+    wandb.log({"Loss/val_scan": loss.item(), "epoch": epoch}) #wandb기록
+
+    return loss.item()
+
+
+def train_recomb(dae, bvae, scan, recomb, data, label, in_label, optimizer): #in_label: 개입벡터
     recomb.train()
 
     factor_sizes = [5, 5, 4, 5, 360] #데이터셋 크기에 맞춰서
@@ -219,6 +268,41 @@ def train_recomb(dae, bvae, scan, recomb, data, label, in_label, optimizer, begi
     optimizer.step()
 
     wandb.log({"Loss/train_recombinator": loss.item(), "epoch": epoch}) #wandb기록
+
+    return loss.item()
+
+def val_recomb(dae, bvae, scan, recomb, val_data, val_label, in_label):
+    recomb.eval()
+
+    factor_sizes = [5, 5, 4, 5, 360] #데이터셋 크기에 맞춰서
+
+    xs = val_data
+    ys0 = val_label
+    ys1 = change_factor_randomly_with_zero_option(ys0, factor_sizes) 
+    ys = change_factor_positions(ys0, ys1, factor_sizes)
+
+    if use_cuda:
+        xs, ys, ys0, ys1 = xs.cuda(), ys.cuda(), ys0.cuda(), ys1.cuda()
+
+    # 인코딩 과정 
+    _,_, mu_0, logvar_0 = scan(ys0) #라벨을 scan으로 :a
+    _,_, mu_1, logvar_1 = scan(ys1) #랜덤한 라벨 만들고 scan :b
+    _,_, y_mu, y_logvar = scan(ys) #라벨과 랜덤라벨을 합친 라벨을 scan :c
+    _, x_mu, x_logvar = bvae(xs) #이미지를 bvae로 
+
+    # Recombinator로 결합
+    r_z, r_mu, r_logvar = recomb(mu_0, logvar_0, mu_1, logvar_1)
+
+    # 디코딩 및 손실 계산
+    y_out = scan.decoder(r_z)
+    symbol_loss = recomb.compute_loss(r_mu, r_logvar, x_mu, x_logvar, y_mu, y_logvar) #a+b의 var,mu가 c의 var,mu와 가까워지게 kl계산, backprop
+
+    # 손실 및 역전파
+    loss = symbol_loss  # 심볼 손실만 사용
+
+    wandb.log({"Loss/val_recombinator": loss.item(), "epoch": epoch}) #wandb기록
+
+    return loss.item()
 
 num_classes=379
 
@@ -287,15 +371,6 @@ def process_labels(batch_labels, num_classes): #def process_labels(batch_labels,
 # num_classes = len(word_to_idx) #19+360
 num_classes=379
 
-# DataParallel에서 저장된 모델 체크포인트 로드 시 'module.' 접두사 제거 함수
-def remove_module_prefix(state_dict):
-    new_state_dict = {}
-    for key, value in state_dict.items():
-        new_key = key.replace('module.', '')  # 'module.' 접두사 제거
-        new_state_dict[new_key] = value
-    return new_state_dict
-
-
 # Transform 적용 
 # transforms.Compose(): 여러개의 전처리(transform)을 순차적으로 묶어서 한번에 적용해줌
 transform = transforms.Compose([ 
@@ -304,8 +379,10 @@ transform = transforms.Compose([
 ])
 
 #데이터셋 있으면 있는거 사용, 없으면 make_sprites
-dataset = datasets.Sprites(conf.data_dir, n=100000, canvas_size=128, train=True, transform=transform)
+dataset = datasets.Sprites(conf.data_dir, n=100000, canvas_size=128, mode='train', transform=transform)
+val_datset= datasets.Sprites(conf.data_dir, n=100000, canvas_size=128, mode='val', transform=transform)
 data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+val_data_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 monet = models.Monet(conf, height, width).to(device)
 monet = nn.DataParallel(monet)
@@ -314,7 +391,6 @@ monet = nn.DataParallel(monet)
 if os.path.isfile(conf.checkpoint_file):
         monet.load_state_dict(torch.load(conf.checkpoint_file))
         print('Restored Monet parameters from', conf.checkpoint_file)
-
 else:
     print('Could not restore Monet parameters from', conf.checkpoint_file)
 
@@ -332,19 +408,17 @@ optimizer = optim.Adam(list(model.parameters()) + list(loss_fn.parameters()), lr
 optimizer_recomb = optim.Adam(recomb.parameters(), lr=1e-3)
 
 # monet 학습 생략 (이미 따로 학습된 ckpt파일 있음)
-#train_monet(monet, data_loader, optimizer_monet)
+# train_monet(monet, data_loader, optimizer_monet)
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
 
 # constellation pt 로드
-pt_path = os.path.join(conf.checkpoint_dir, 'constellation.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, 'constellation.ckpt')
 
-#model.load_state_dict(remove_module_prefix(checkpoint['constellation_model_state_dict']))
-
-if os.path.isfile(pt_path):
-    model.load_state_dict(torch.load(pt_path))
-    print(f'Restored Constellation parameters from {pt_path}')
+if os.path.isfile(ckpt_path):
+    model.load_state_dict(torch.load(ckpt_path))
+    print(f'Restored Constellation parameters from {ckpt_path}')
 else: #없으면 train constellation
     print('Start training Constellation...')
     for epoch in range(num_epochs): #constellation 루프
@@ -370,7 +444,7 @@ else: #없으면 train constellation
             wandb.log({"Loss/train_constellation": loss.item(), "epoch": epoch}) #wandb기록
 
         print(f'Epoch {epoch+1}/{num_epochs}, Constellation Loss: {loss.item()}')
-        torch.save({'constellation_model_state_dict': model.state_dict()},'./checkpoints/constellation.ckpt')
+        torch.save(model.state_dict(), ckpt_path)
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
@@ -379,14 +453,17 @@ for param in model.parameters():
 
 
 # dae pt 로드
-pt_path = os.path.join(conf.checkpoint_dir, 'dae.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, 'dae.ckpt')
 
-if os.path.isfile(pt_path):
-    dae.load_state_dict(torch.load(pt_path))
-    print(f'Restored Dae parameters from {pt_path}')
+if os.path.isfile(ckpt_path):
+    dae.load_state_dict(torch.load(ckpt_path))
+    print(f'Restored Dae parameters from {ckpt_path}')
 else: #없으면 train dae
     print('Start training DAE...')
+
+    best_val_loss=float('inf')
     for epoch in range(num_epochs): #dae 루프
+        train_loss=0
         for batch in data_loader:
             x, _ = batch
             if use_cuda:
@@ -396,10 +473,29 @@ else: #없으면 train dae
             r, _, _, _, _, _, _, _ = model.encode(x)
 
             # Train DAE
-            train_dae(dae, r.detach(), optimizer_dae)
+            batch_loss=train_dae(dae, r.detach(), optimizer_dae)
+            train_loss+=batch_loss
 
-        print(f'Dae Epoch {epoch+1}/{num_epochs}')
-        torch.save({'dae_model_state_dict': dae.state_dict()},'./checkpoints/dae.ckpt')
+        train_loss/=len(data_loader)
+
+        print(f'Dae Epoch {epoch+1}/{num_epochs}, loss: {train_loss}')
+
+        val_loss=0.0
+        for val_batch in val_data_loader: 
+            val_x, _ = val_batch
+            if use_cuda:
+                val_x = val_x.cuda()
+
+            r_val, _, _, _, _, _, _, _ = model.encode(val_x)
+            batch_loss=val_dae(dae, r_val.detach())
+            val_loss+=batch_loss
+
+        val_loss/=len(val_data_loader)
+
+        if val_loss < best_val_loss:
+            best_val_loss=val_loss
+            print(f'Updated .ckpt, loss: {best_val_loss}')
+            torch.save(dae.state_dict(), ckpt_path)
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
@@ -410,14 +506,17 @@ for param in dae.parameters():
 
 
 # bvae pt 로드
-pt_path = os.path.join(conf.checkpoint_dir, 'bvae.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, 'bvae.ckpt')
 
-if os.path.isfile(pt_path):
-    bvae.load_state_dict(torch.load(pt_path)['bvae_model_state_dict'])
-    print(f'Restored Bvae parameters from {pt_path}')
+if os.path.isfile(ckpt_path):
+    bvae.load_state_dict(torch.load(ckpt_path)['bvae_model_state_dict'])
+    print(f'Restored Bvae parameters from {ckpt_path}')
 else: #없으면 train bvae
     print('Start training BVAE...')
+
+    best_val_loss=float('inf')
     for epoch in range(num_epochs): # bvae 루프
+        train_loss=0
         for batch in data_loader:
             x, _ = batch
             if use_cuda:
@@ -427,10 +526,29 @@ else: #없으면 train bvae
             r, _, _, _, _, _, _, _ = model.encode(x)
 
             # Train BVAE
-            train_bvae(dae, bvae, r.detach(), optimizer_bvae)
+            batch_loss = train_bvae(dae, bvae, r.detach(), optimizer_bvae)
+            train_loss += batch_loss
 
-        print(f'Bvae Epoch {epoch+1}/{num_epochs}')
-        torch.save({'bvae_model_state_dict': bvae.state_dict()},'./checkpoints/bvae.ckpt')
+        train_loss/=len(data_loader)
+        
+        print(f'Bvae Epoch {epoch+1}/{num_epochs}, train loss: {train_loss}')
+
+        val_loss=0.0
+        for val_batch in val_data_loader: 
+            val_x, _ = val_batch
+            if use_cuda:
+                val_x = val_x.cuda()
+
+            r_val, _, _, _, _, _, _, _ = model.encode(val_x)
+            batch_loss=val_bvae(dae, bvae, r_val.detach())
+            val_loss+=batch_loss.item()
+
+        val_loss /= len(val_data_loader)
+
+        if val_loss < best_val_loss:
+            best_val_loss=val_loss    
+            print(f'Updated .ckpt, loss: {best_val_loss}')
+            torch.save(bvae.state_dict(), ckpt_path)
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
@@ -443,14 +561,17 @@ for param in bvae.parameters():
 
 
 # scan pt 로드
-pt_path = os.path.join(conf.checkpoint_dir, 'scan.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, 'scan.ckpt')
 
-if os.path.isfile(pt_path):
-    scan.load_state_dict(torch.load(pt_path)['scan_model_state_dict'])
-    print(f'Restored SCAN parameters from {pt_path}')
+if os.path.isfile(ckpt_path):
+    scan.load_state_dict(torch.load(ckpt_path)['scan_model_state_dict'])
+    print(f'Restored SCAN parameters from {ckpt_path}')
 else: #없으면 train scan
     print('Start training SCAN...')
+
+    best_val_loss=float('inf')
     for epoch in range(num_epochs): #scan 루프
+        train_loss=0
         for batch in data_loader:
             x, batch_labels = batch
             one_hot_labels = process_labels(batch_labels, num_classes)
@@ -462,10 +583,34 @@ else: #없으면 train scan
             r, _, _, _, _, _, _, _ = model.encode(x)
 
             # Train SCAN with BVAE encoded results
-            train_scan(bvae, scan, r.detach(), one_hot_labels, optimizer_scan)
+            batch_loss=train_scan(bvae, scan, r.detach(), one_hot_labels, optimizer_scan)
+            train_loss+=batch_loss    
 
-        print(f'Scan Epoch {epoch+1}/{num_epochs}')
-        torch.save({'scan_model_state_dict': scan.state_dict()},'./checkpoints/scan.ckpt')
+        train_loss/=len(data_loader)
+
+        print(f'Scan Epoch {epoch+1}/{num_epochs}, loss: {train_loss}')
+
+        val_loss=0.0
+        for val_batch in val_data_loader:
+            val_x, val_batch_labels=val_batch
+            one_hot_labels = process_labels(val_batch_labels, num_classes)
+            if use_cuda:
+                val_x = val_x.cuda()
+                one_hot_labels = one_hot_labels.cuda()
+
+            # Constellation encode
+            r_val, _, _, _, _, _, _, _ = model.encode(val_x)
+
+            # Train SCAN with BVAE encoded results
+            batch_loss=val_scan(bvae, scan, r_val.detach(), one_hot_labels)
+            val_loss+=batch_loss
+
+        val_loss/=len(val_data_loader)
+
+        if val_loss < best_val_loss:
+            best_val_loss=val_loss
+            print(f'Updated .ckpt, loss: {best_val_loss}')
+            torch.save(scan.state_dict(), ckpt_path)
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
@@ -479,28 +624,57 @@ for param in scan.parameters():
     param.requires_grad = False  # SCAN 모델 고정
 
 # recombinator pt 로드
-pt_path = os.path.join(conf.checkpoint_dir, 'recombinator.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, 'recombinator.ckpt')
 
-if os.path.isfile(pt_path):
-    recomb.load_state_dict(torch.load(pt_path))
-    print(f'Restored Recombinator parameters from {pt_path}')
-else: #없으면 train recombinator
+if os.path.isfile(ckpt_path):
+    recomb.load_state_dict(torch.load(ckpt_path)) #['recombinator_model_state_dict'] 해야될수도 있음
+    print(f'Restored Recombinator parameters from {ckpt_path}') 
+else: # 없으면 train recombinator
     print('Start training Recombinator...')
+
+    best_val_loss=float('int')
     for epoch in range(num_epochs):  # 전체 학습 에포크 수
+        train_loss=0
         for batch in data_loader:
-            x, batch_labels = batch  # 입력 데이터와 라벨 로드
+            x, labels = batch  # 입력 데이터와 라벨 로드
+            if use_cuda:
+                x = x.cuda()
+                labels = labels.cuda()
 
             r, _, _, _, _, _, _, _ = model.encode(x)
 
             # 라벨 처리 (현재의 ys0와 개입할 ys1 생성)
-            ys0 = process_labels(batch_labels, num_classes)  # 현재 상태 라벨
-            ys1 = process_labels(batch_labels, num_classes)  # 개입할 상태 라벨
+            ys0 = process_labels(labels, num_classes)  # 현재 상태 라벨
+            ys1 = process_labels(labels, num_classes)  # 개입할 상태 라벨
             # Recombinator 학습 함수 호출
-            train_recomb(dae, bvae, scan, recomb, r, ys0, ys1, optimizer_recomb)
+            batch_loss=train_recomb(dae, bvae, scan, recomb, r, ys0, ys1, optimizer_recomb)
+            train_loss+=batch_loss
 
-        # 에포크 완료 시 로그 출력
-        print(f'Epoch {epoch + 1}/{num_epochs} complete for Recombinator')
-        torch.save({'dae_model_state_dict': dae.state_dict()},'./checkpoints/dae.ckpt')
+        train_loss/=len(data_loader)
+
+        print(f'Epoch {epoch + 1}/{num_epochs}, train loss: {train_loss}')
+
+        val_loss=0.0
+        for val_batch in val_data_loader:
+            val_x, val_labels = val_batch  # 입력 데이터와 라벨 로드
+            if use_cuda:
+                val_x = val_x.cuda()
+                val_labels = val_labels.cuda()
+            r_val, _, _, _, _, _, _, _ = model.encode(val_x)
+
+            # 라벨 처리 (현재의 ys0와 개입할 ys1 생성)
+            ys0 = process_labels(val_labels, num_classes)  # 현재 상태 라벨
+            ys1 = process_labels(val_labels, num_classes)  # 개입할 상태 라벨
+            # Recombinator 학습 함수 호출
+            batch_loss=train_recomb(dae, bvae, scan, recomb, r, ys0, ys1, optimizer_recomb)
+            val_loss+=batch_loss
+
+        val_loss /=len(val_data_loader)
+
+        if val<loss <best_val_loss:
+            best_val_loss=val_loss
+            print(f'Updated .ckpt, loss: {best_val_loss}')
+            torch.save(recombinator.state_dict(), ckpt_path)
 
 print('Train Fin.')
 

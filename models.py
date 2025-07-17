@@ -294,15 +294,6 @@ class Monet(nn.Module):
         p_x = torch.sum(p_x, [1, 2, 3])
         return p_x, x_recon, mask_pred
 
-
-#필요없을거같은데 지워,,
-# def print_image_stats(images, name):
-#     print(name, '0 min/max', images[:, 0].min().item(), images[:, 0].max().item())
-#     print(name, '1 min/max', images[:, 1].min().item(), images[:, 1].max().item())
-#     print(name, '2 min/max', images[:, 2].min().item(), images[:, 2].max().item())
-
-
-
 #SCAN (train시키는 코드 필요)
 class BVAE(nn.Module): #학습 시 scan의 이미지 처리 단(beta VAE)
     def __init__(self, input_size, hidden_size, output_size):
@@ -463,7 +454,7 @@ class Recombinator(nn.Module):
 
     def compute_loss(self, r_mu, r_logvar, x_mu, x_logvar, y_mu, y_logvar):
         symbol_loss = self._kl(y_mu, y_logvar, r_mu, r_logvar) #...forward kl 아마도.,?
-        return _, symbol_loss
+        return symbol_loss
 
     def _kl(self, mu1, logvar1, mu2, logvar2):
         mu = mu1 - mu2
