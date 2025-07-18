@@ -26,27 +26,35 @@ wandb.init(project="MONet for constellation")
 
 device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+dataset = datasets.Sprites(conf.data_dir, n=100000, canvas_size=128, mode='train', transform=transform)
+val_datset= datasets.Sprites(conf.data_dir, n=100000, canvas_size=128, mode='val', transform=transform)
+data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+val_data_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+
 def numpify(tensor):
     return tensor.cpu().detach().numpy()
 
-def run_training(monet, conf, trainloader):
-    os.makedirs(os.path.dirname(conf.checkpoint_dir), exist_ok=True) #여기랑 다음줄까지,,,,,,,,ㅜㅜ
-    #checkpoint_dir = './checkpoints'
-    if conf.load_parameters and os.path.isfile(conf.checkpoint_file):
-        monet.load_state_dict(torch.load(conf.checkpoint_file))
-        print('Restored parameters from', conf.checkpoint_file)
-    else:
-        for w in monet.parameters():
-            std_init = 0.01
-            nn.init.normal_(w, mean=0., std=std_init)
-        print('Initialized parameters')
+def train_monet(monet, data_loader, optimizer):
+    monet.train()
 
-    optimizer = optim.RMSprop(monet.parameters(), lr=1e-4)
+    os.makedirs(os.path.dirname(conf.checkpoint_dir), exist_ok=True) 
+    #checkpoint_dir = './checkpoints'
+    # if conf.load_parameters and os.path.isfile(conf.checkpoint_file): #train.py에서 실행됨
+    #     monet.load_state_dict(torch.load(conf.checkpoint_file))
+    #     print('Restored parameters from', conf.checkpoint_file)
+
+    for w in monet.parameters():
+        std_init = 0.01
+        nn.init.normal_(w, mean=0., std=std_init)
+    print('Initialized parameters')
+
+    #optimizer = optim.RMSprop(monet.parameters(), lr=1e-4)
 
     for epoch in range(conf.num_epochs):
         running_loss = 0.0
-        for i, data in enumerate(trainloader, 0):
-            images, labelss = data
+        for i, data in enumerate(data_loader, 0):
+            images, labels = data
             images = images.to(device)
             optimizer.zero_grad()
             output = monet(images)
@@ -79,64 +87,13 @@ def sprite_experiment():
     #데이터셋 없으면 생성하는 코드
     trainset = datasets.Sprites(conf.data_dir, train=True, transform=transform) 
     
-    trainloader = torch.utils.data.DataLoader(trainset,
+    data_loader = torch.utils.data.DataLoader(trainset,
                                               batch_size=conf.batch_size,
                                               shuffle=True, num_workers=2)
     monet = models.Monet(conf,128, 128).to(device)
     if conf.parallel:
         monet = nn.DataParallel(monet)
-    run_training(monet, conf, trainloader)
-
-
-#test하는 코드
-def sprite_experiment_test():
-    conf = config.sprite_config
-    transform = transforms.Compose([transforms.ToTensor(),
-                                    transforms.Lambda(lambda x: x.float()),
-                                    ])
-    #데이터셋 없으면 생성하는 코드
-    trainset = datasets.Sprites(conf.data_dir, train=True, transform=transform) 
-    
-    trainloader = torch.utils.data.DataLoader(trainset,
-                                              batch_size=conf.batch_size,
-                                              shuffle=True, num_workers=2)
-    monet = models.Monet(conf, 128, 128).to(device)
-    if conf.parallel:
-        monet = nn.DataParallel(monet)
-    run_testing(monet, conf, trainloader)
-
-#test하는 코드 #나중에 testloader만들어서 trainloader 다 대체해야돼!!
-def run_testing(monet, conf, trainloader):
-    # 모델 파라미터 로드
-    if os.path.isfile(conf.checkpoint_file):
-        monet.load_state_dict(torch.load(conf.checkpoint_file))
-        print('Restored parameters from', conf.checkpoint_file)
-    else:
-        print('No checkpoint found at', conf.checkpoint_file)
-        return
-
-    monet.eval()  # 평가 모드
-    total_loss = 0.0
-
-    with torch.no_grad():  # 평가 시에는 gradient 필요 없음
-        for i, data in enumerate(trainloader, 0):
-            images, labels = data
-            images = images.to(device)
-
-            output = monet(images)
-            loss = torch.mean(output['loss'])
-            total_loss += loss.item()
-
-            # 특정 주기마다 결과 시각화
-            if i % conf.vis_every == conf.vis_every - 1:
-                print('[Test %5d] loss: %.3f' % (i + 1, total_loss / (i + 1)))
-                visualize_masks(numpify(images[:8]),
-                                numpify(output['masks'][:8]),
-                                numpify(output['reconstructions'][:8]))
-
-    avg_loss = total_loss / len(trainloader)
-    print('Test done. Average loss:', avg_loss)
-    wandb.log({"Loss/test_monet": avg_loss})
+    train_monet(monet, conf, data_loader)
 
 
 # #test할 때 visaulize해서 저장하는 코드

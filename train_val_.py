@@ -99,30 +99,35 @@ def change_factor_randomly_with_zero_option(ys1, factor_sizes, zero_prob=0.5): #
 
     return ys
 
-def train_monet(monet, data_loader, optimizer, training_epochs=100, display_epoch=1):
-    print("Start training MONet")
+def train_monet(monet, data, optimizer):
     monet.train()
 
-    for epoch in range(training_epochs):
-        average_loss = 0.0
+    if use_cuda:
+        data = data.cuda()
 
-        for batch_data, _ in data_loader:
-            if use_cuda:
-                batch_data = batch_data.cuda()
+    optimizer.zero_grad()
+    output = monet(data)
+    loss = torch.mean(output['loss'])
+    loss.backward()
+    optimizer.step()
 
-            optimizer.zero_grad()
-            output = monet(batch_data)
-            loss = output['loss']
-            loss = loss.mean()
-            loss.backward()
-            optimizer.step()
+    wandb.log({"Loss/train_monet": loss.item(), "epoch": epoch}) #wandb 기록
 
-            average_loss += loss.item() / len(data_loader)
+    return loss.item()
 
-        wandb.log({"Loss/train_monet": average_loss, "epoch": epoch}) #wandb 기록
+def val_monet(monet, val_data):
+    monet.eval()
 
-        if epoch % display_epoch == 0:
-            print(f"Epoch: {epoch + 1}, loss: {average_loss:.6f}")
+    if use_cuda:
+        val_data = val_data.cuda()
+
+    with torch.no_grad():
+        output = monet(val_data)
+        loss = torch.mean(output['loss'])
+
+    wandb.log({"Loss/val_monet": loss.item(), "epoch": epoch}) #wandb 기록
+
+    return loss.item()
 
 def train_dae(dae, data, optimizer): #data가 constellation.encode에서 나오는건데, 이거 monet의 output임
     dae.train()
@@ -379,20 +384,13 @@ transform = transforms.Compose([
 ])
 
 #데이터셋 있으면 있는거 사용, 없으면 make_sprites
-dataset = datasets.Sprites(conf.data_dir, n=100000, canvas_size=128, mode='train', transform=transform)
-val_datset= datasets.Sprites(conf.data_dir, n=100000, canvas_size=128, mode='val', transform=transform)
+dataset = datasets.Sprites(conf.data_dir, mode='train', transform=transform)
+val_datset= datasets.Sprites(conf.data_dir, mode='val', transform=transform)
 data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 val_data_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
 monet = models.Monet(conf, height, width).to(device)
 monet = nn.DataParallel(monet)
-
-# monet pt파일 로드
-if os.path.isfile(conf.checkpoint_file):
-        monet.load_state_dict(torch.load(conf.checkpoint_file))
-        print('Restored Monet parameters from', conf.checkpoint_file)
-else:
-    print('Could not restore Monet parameters from', conf.checkpoint_file)
 
 dae = models.DAE(input_size=r_dim, hidden_size=hidden_dim, output_size=r_dim).to(device)
 bvae = models.BVAE(input_size=r_dim, hidden_size=hidden_dim, output_size=r_dim).to(device)
@@ -400,15 +398,54 @@ scan = models.SCAN(input_size=num_classes, hidden_size=hidden_dim, output_size=r
 model = models.Constellation(conf, monet, latent_dim, hidden_dim, output_dim, latent_dim, r_dim, height, width).to(device) #input 차원 맞추기
 recomb = models.Recombinator(input_size=r_dim, hidden_size=hidden_dim, output_size=r_dim).to(device)
 
-#optimizer_monet = optim.Adam(monet.parameters(), lr=1e-3)
+optimizer_monet = optim.Adam(monet.parameters(), lr=1e-3)
+#optimizer_monet = optim.RMSprop(monet.parameters(), lr=1e-4)
 optimizer_dae = optim.Adam(dae.parameters(), lr=1e-3)
 optimizer_bvae = optim.Adam(bvae.parameters(), lr=1e-3)
 optimizer_scan = optim.Adam(scan.parameters(), lr=1e-3)
 optimizer = optim.Adam(list(model.parameters()) + list(loss_fn.parameters()), lr=1e-3)
 optimizer_recomb = optim.Adam(recomb.parameters(), lr=1e-3)
 
-# monet 학습 생략 (이미 따로 학습된 ckpt파일 있음)
-# train_monet(monet, data_loader, optimizer_monet)
+# monet ckpt파일 로드
+ckpt_path = os.path.join(conf.checkpoint_dir, 'monet.ckpt')
+
+if os.path.isfile(conf.checkpoint_file):
+        monet.load_state_dict(torch.load(ckpt_path))
+        print('Restored Monet parameters from', ckpt_path)
+else:
+    print('Start training Monet...')
+
+    best_val_loss=float('inf')
+    for epoch in range(num_epochs): #monet 루프
+        train_loss=0
+        for batch in data_loader:
+            x, _ = batch
+            if use_cuda:
+                x = x.cuda()
+
+            # Train MONet
+            batch_loss=train_monet(monet, x, optimizer_monet)
+            train_loss+=batch_loss
+
+        train_loss/=len(data_loader)
+
+        print(f'MONet Epoch {epoch+1}/{num_epochs}, loss: {train_loss}')
+
+        val_loss=0.0
+        for val_batch in val_data_loader: 
+            val_x, _ = val_batch
+            if use_cuda:
+                val_x = val_x.cuda()
+
+            batch_loss=val_monet(monet, val_x)
+            val_loss+=batch_loss
+
+        val_loss/=len(val_data_loader)
+
+        if val_loss < best_val_loss:
+            best_val_loss=val_loss
+            print(f'Updated .ckpt, loss: {best_val_loss}')
+            torch.save(monet.state_dict(), ckpt_path)
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
@@ -421,7 +458,12 @@ if os.path.isfile(ckpt_path):
     print(f'Restored Constellation parameters from {ckpt_path}')
 else: #없으면 train constellation
     print('Start training Constellation...')
+
+    best_val_loss=float('inf')
+
     for epoch in range(num_epochs): #constellation 루프
+        train_loss = 0.0
+        num_batches = 0
         for batch in data_loader:
             x, _ = batch
             if use_cuda:
@@ -437,14 +479,42 @@ else: #없으면 train constellation
             loss = loss_fn.total_loss(a, full_recon, mu_q, logvar_q, o, learned_mask)
             loss = torch.sum(loss)
             loss.backward()
-
             optimizer.step()
 
-            #writer.add_scalar('Loss/train_constellation', loss.item(), epoch)  # 텐서보드에 기록
-            wandb.log({"Loss/train_constellation": loss.item(), "epoch": epoch}) #wandb기록
+            train_loss += loss.item()
+            num_batches += 1
 
-        print(f'Epoch {epoch+1}/{num_epochs}, Constellation Loss: {loss.item()}')
-        torch.save(model.state_dict(), ckpt_path)
+        train_loss /= num_batches
+        wandb.log({"Loss/train_constellation": train_loss, "epoch": epoch}) #wandb기록
+        print(f'Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss}')
+
+        #constellation -> val
+        val_loss=0.0
+        num_batches = 0
+        for batch in val_loader:
+            val_x, _ = batch
+            if use_cuda:
+                val_x = val_x.cuda()
+
+            with torch.no_grad():
+                r, mu_q, logvar_q, a, o, learned_mask, recon, residue = model.encode(val_x)
+
+                # Decode
+                full_recon, mu, logvar = model.decode(r)
+
+                loss = loss_fn.total_loss(a, full_recon, mu_q, logvar_q, o, learned_mask)
+                loss = torch.sum(loss)
+                val_loss += loss.item()
+                num_batches += 1
+        val_loss /= num_batches  # 평균 loss 계산   
+                
+        wandb.log({"Loss/val_constellation": val_loss, "epoch": epoch}) #wandb기록
+        print(f'Epoch {epoch+1}/{num_epochs}, Val Loss: {val_loss}')
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), ckpt_path)
+            print(f"Updated .ckpt, Best Val Loss: {best_val_loss}")
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
@@ -624,7 +694,7 @@ for param in scan.parameters():
     param.requires_grad = False  # SCAN 모델 고정
 
 # recombinator pt 로드
-ckpt_path = os.path.join(conf.checkpoint_dir, 'recombinator.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, 'recomb.ckpt')
 
 if os.path.isfile(ckpt_path):
     recomb.load_state_dict(torch.load(ckpt_path)) #['recombinator_model_state_dict'] 해야될수도 있음

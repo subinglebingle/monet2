@@ -30,12 +30,6 @@ conf = config.sprite_config
 batch_size = conf.batch_size
 num_epochs = conf.num_epochs
 
-# state_dict = torch.load('./checkpoints/sprites.ckpt')
-# print(list(state_dict.keys())[:30])  # 상위 10개 key 출력
-# state_dict = torch.load('./checkpoints/constellation.ckpt')
-# print(list(state_dict.keys())[:30])  # 상위 10개 key 출력
-# exit()
-
 use_cuda = torch.cuda.is_available()
 device = 'cuda' if use_cuda else 'cpu'
 if use_cuda:
@@ -341,7 +335,6 @@ for param in monet.parameters():
 pt_path = os.path.join(conf.checkpoint_dir, 'constellation.ckpt')
 
 #model.load_state_dict(remove_module_prefix(checkpoint['constellation_model_state_dict']))
-
 if os.path.isfile(pt_path):
     model.load_state_dict(torch.load(pt_path))
     print(f'Restored Constellation parameters from {pt_path}')
@@ -479,7 +472,7 @@ for param in scan.parameters():
     param.requires_grad = False  # SCAN 모델 고정
 
 # recombinator pt 로드
-pt_path = os.path.join(conf.checkpoint_dir, 'recombinator.ckpt')
+pt_path = os.path.join(conf.checkpoint_dir, 'recomb.ckpt')
 
 if os.path.isfile(pt_path):
     recomb.load_state_dict(torch.load(pt_path))
@@ -500,7 +493,7 @@ else: #없으면 train recombinator
 
         # 에포크 완료 시 로그 출력
         print(f'Epoch {epoch + 1}/{num_epochs} complete for Recombinator')
-        torch.save({'dae_model_state_dict': dae.state_dict()},'./checkpoints/dae.ckpt')
+        torch.save({'recomb_model_state_dict': recomb.state_dict()},'./checkpoints/recomb.ckpt')
 
 print('Train Fin.')
 

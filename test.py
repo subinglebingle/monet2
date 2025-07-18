@@ -10,16 +10,17 @@ import numpy as np
 import visdom
 import os
 
-#import model
+#import models
 #import datasets
-from model import Constellation, SCAN, Monet, BVAE, DAE, Config
-from dataset import Sprites
+from models import Constellation, SCAN, Monet, BVAE, DAE, Recombinator
+import config
+from datasets import Sprites
 
 import matplotlib.pyplot as plt
 
-import wandb
-wandb.login(key=os.getenv("WANDB_API_KEY"))
-wandb.init(project="MONet for constellation")
+#import wandb
+#wandb.login(key=os.getenv("WANDB_API_KEY"))
+#wandb.init(project="Constellation test")
 
 # Device 설정
 device = torch.device('cpu')  # CPU에서 실행하도록 설정
@@ -37,17 +38,10 @@ height = 128  # 입력 이미지의 높이
 width = 128   # 입력 이미지의 너비
 batch_size = 1  # 평가 시에는 하나의 이미지에 대해 처리
 
-#  class Config:
-#     num_blocks = 6
-#     channel_base = 128
-
 # Config 설정
-conf = Config()
+conf = config.sprite_config
 
-def process_labels(labels, word_to_idx, num_classes=379):
-    """
-    여러 텍스트 라벨을 받아 멀티-핫 인코딩으로 변환하는 함수
-    """
+def process_labels(labels, word_to_idx, num_classes=379):#여러 텍스트 라벨을 받아 멀티-핫 인코딩으로 변환하는 함수
     # 멀티핫 인코딩을 위한 빈 벡터 생성
     one_hot_labels = torch.zeros(1, num_classes, dtype=torch.float)  # 배치 크기는 1 (평가 시 하나의 입력만 사용)
 
@@ -194,12 +188,12 @@ def remove_module_prefix(state_dict):
 checkpoint = torch.load('combined_models.pt', map_location=device)
 
 # 체크포인트에서 'module.' 접두사 제거 후 파라미터 로드
-model.load_state_dict(remove_module_prefix(checkpoint['constellation_model_state_dict']))
-monet.load_state_dict(remove_module_prefix(checkpoint['monet_model_state_dict']))
-scan.load_state_dict(remove_module_prefix(checkpoint['scan_model_state_dict']))
-bvae.load_state_dict(remove_module_prefix(checkpoint['bvae_model_state_dict']))
-dae.load_state_dict(remove_module_prefix(checkpoint['dae_model_state_dict']))
-recomb.load_state_dict(remove_module_prefix(checkpoint['recomb_model_state_dict']))
+monet.load_state_dict(remove_module_prefix(torch.load(conf.checkpoint_file)))
+model.load_state_dict(remove_module_prefix(torch.load(os.path.join(conf.checkpoint_dir, 'constellation.ckpt'))))
+scan.load_state_dict(remove_module_prefix(torch.load(os.path.join(conf.checkpoint_dir, 'scan.ckpt'))))
+bvae.load_state_dict(remove_module_prefix(torch.load(os.path.join(conf.checkpoint_dir, 'bvae.ckpt'))))
+dae.load_state_dict(remove_module_prefix(torch.load(os.path.join(conf.checkpoint_dir, 'dae.ckpt'))))
+recomb.load_state_dict(remove_module_prefix(torch.load(os.path.join(conf.checkpoint_dir, 'recomb.ckpt'))))
 
 # 모델을 평가 모드로 전환
 model.eval()
@@ -285,6 +279,3 @@ for idx, (image, label) in enumerate(data_loader):
 
         # break  
         # test num개의 이미지에 대해서 평가
-
-# TensorBoard writer 종료
-# writer.close()
