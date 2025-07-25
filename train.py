@@ -175,7 +175,7 @@ def train_scan(bvae, scan, data, label, optimizer):
     torch.nn.utils.clip_grad_norm_(scan.parameters(), max_norm=1.0) #기울기 폭발 막기 위한 클리핑
     optimizer.step()
 
-    wandb.log({"Loss/train": loss.item(), "epoch": epoch}) #wandb기록
+    wandb.log({"Loss/train_scan": loss.item(), "epoch": epoch}) #wandb기록
 
 
 def train_recomb(dae, bvae, scan, recomb, data, label, in_label, optimizer, begin_epoch=0, training_epochs=100, display_epoch=1, save_epoch=10):

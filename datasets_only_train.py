@@ -112,16 +112,15 @@ def make_sprites(n=100000, height=128, width=128): #h,w=64 였음 #500000?? 2000
             progress_bar(i, n)
     images = np.clip(images, 0.0, 1.0)
 
-    return {'x_train': images[:8 * n // 10], #80%
-            'labels_train': labels[:8 * n // 10],
-            'x_val': images[8 * n // 10: 9 * n // 10], #10%
-            'labels_val': labels[8 * n // 10: 9 * n // 10],
-            'x_test': images[8 * n // 10:], #10%
-            'labels_test': labels[8 * n // 10:]}
+    return {'x_train': images[:4 * n // 5], #80%
+            'labels_train': labels[:4 * n // 5],
+            'x_test': images[4 * n // 5:], #20%
+            'labels_test': labels[4 * n // 5:]}
 
+#canvas_size를 64에서 128로
 class Sprites(Dataset):
-    def __init__(self, directory, n=100000, canvas_size=128, #canvas_size를 64에서 128로
-                 mode='train', transform=None): #mode=train/val/test       #원래는 train=True
+    def __init__(self, directory, n=100, canvas_size=128, 
+                 mode='train', transform=None):
         np_file = 'sprites_{}_{}.npz'.format(n, canvas_size)
         full_path = os.path.join(directory, np_file)
         os.makedirs(directory, exist_ok=True)
@@ -132,16 +131,8 @@ class Sprites(Dataset):
         data = np.load(full_path)
 
         self.transform = transform
-
-        if mode=='train':
-            self.images = data['x_train']
-            self.labels = data['labels_train']
-        elif mode=='val':
-            self.images = data['x_val']
-            self.labels = data['labels_val']
-        else:
-            self.images = data['x_test']
-            self.labels = data['labels_test']
+        self.images = data['x_train'] if train else data['x_test']
+        self.labels = data['labels_train'] if train else data['labels_test']
 
     def __len__(self):
         return self.images.shape[0]

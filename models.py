@@ -559,11 +559,11 @@ class Constellation(nn.Module):
         learned_mask = self.mask_extractor(o) #.............monet_output의 latent vector만 가지고 mask extractor가 된다고,,?
 
         a = o * learned_mask
-
+        
         residue = o * (1 - learned_mask)
         num_nodes = o.shape[1]
         edge_index = self.create_fully_connected_edge_index(num_nodes)
-        edge_index = edge_index.to(device)
+                
         mu_q, logvar_q = self.gnn(a, edge_index)
         r = self.lstm.reparameterize(mu_q, logvar_q)
         return r, mu_q, logvar_q, a, o, learned_mask, recon, residue

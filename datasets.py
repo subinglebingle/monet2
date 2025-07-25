@@ -83,16 +83,13 @@ def progress_bar(count, total, status=''):
     sys.stdout.flush()
 
 def make_sprites(n=100000, height=128, width=128): #h,w=64 였음 #500000?? 200000?? 100000
-    renderer = renderers.PILRenderer(
-    image_size=(height, width),
-    anti_aliasing=1
-    )
-    images = np.zeros((n, height, width, 3))
+    renderer = renderers.PILRenderer(image_size=(height, width),anti_aliasing=1)
+    images = np.zeros((int(n), int(height), int(width), 3))
     labels = np.zeros((n, 5))
     print('Generating sprite dataset...')
     for i in range(n):
         while True:
-            num_sprites = np.random.randint(4, 8)
+            num_sprites = np.random.randint(4, 7) #4,5,6,7
             curviness = np.random.randint(5) # 0:Straight 1:Bend 2:Arch 3:Horseshoe 4:Circle
             center = np.random.uniform(0.2, 0.8, size=2)
             if curviness == 0:
@@ -107,19 +104,21 @@ def make_sprites(n=100000, height=128, width=128): #h,w=64 였음 #500000?? 2000
         x_pos = np.clip(((np.mean(x_positions)-0.2)/0.6)//0.2, 0, 4)  # 0~4 범위로 제한
         y_pos = np.clip(((np.mean(y_positions)-0.2)/0.6)//0.2, 0, 4)  # 0~4 범위로 제한 #라벨로 -1이 자꾸 나오는 이슈 해결
 
-        images[i], labels[i] = renderer.render(sprites) / 255.0, [x_pos, y_pos+5, num_sprites+10, curviness+14, orientation+19]
+        images[i], labels[i] = renderer.render(sprites) / 255.0, [x_pos, y_pos+5, num_sprites+10-4, curviness+14, orientation+19]
         if i % 100 == 0:
             progress_bar(i, n)
     images = np.clip(images, 0.0, 1.0)
 
-    return {'x_train': images[:4 * n // 5], #80%
-            'labels_train': labels[:4 * n // 5],
-            'x_test': images[4 * n // 5:], #20%
-            'labels_test': labels[4 * n // 5:]}
+    return {'x_train': images[:8 * n // 10], #80%
+            'labels_train': labels[:8 * n // 10],
+            'x_val': images[8 * n // 10: 9 * n // 10], #10%
+            'labels_val': labels[8 * n // 10: 9 * n // 10],
+            'x_test': images[8 * n // 10:], #10%
+            'labels_test': labels[8 * n // 10:]}
 
 class Sprites(Dataset):
-    def __init__(self, directory, n=100000, canvas_size=128, #canvas_size를 64에서 128로
-                 train=True, transform=None):
+    def __init__(self, directory, mode, n=100000, canvas_size=128, #canvas_size를 64에서 128로
+                transform=None): #mode=train/val/test       #원래는 train=True
         np_file = 'sprites_{}_{}.npz'.format(n, canvas_size)
         full_path = os.path.join(directory, np_file)
         os.makedirs(directory, exist_ok=True)
@@ -130,8 +129,16 @@ class Sprites(Dataset):
         data = np.load(full_path)
 
         self.transform = transform
-        self.images = data['x_train'] if train else data['x_test']
-        self.labels = data['labels_train'] if train else data['labels_test']
+
+        if mode=='train':
+            self.images = data['x_train']
+            self.labels = data['labels_train']
+        elif mode=='val':
+            self.images = data['x_val']
+            self.labels = data['labels_val']
+        else:
+            self.images = data['x_test']
+            self.labels = data['labels_test']
 
     def __len__(self):
         return self.images.shape[0]

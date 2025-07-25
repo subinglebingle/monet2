@@ -166,6 +166,8 @@ def val_dae(dae, val_data):
         loss = dae.compute_loss(val_data, recon_batch)
 
     wandb.log({"Loss/val_dae": loss.item(), "epoch": epoch}) #wandb 기록
+    
+    return loss.item()
 
 def train_bvae(dae, bvae, data, optimizer):
     bvae.train()
@@ -181,6 +183,8 @@ def train_bvae(dae, bvae, data, optimizer):
     optimizer.step()
 
     wandb.log({"Loss/train_bvae": loss.item(), "epoch": epoch}) #wandb기록
+    
+    return loss.item()
 
 def val_bvae(dae, bvae, val_data):
     bvae.eval()
@@ -385,7 +389,7 @@ transform = transforms.Compose([
 
 #데이터셋 있으면 있는거 사용, 없으면 make_sprites
 dataset = datasets.Sprites(conf.data_dir, mode='train', transform=transform)
-val_datset= datasets.Sprites(conf.data_dir, mode='val', transform=transform)
+val_dataset= datasets.Sprites(conf.data_dir, mode='val', transform=transform)
 data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 val_data_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
@@ -409,9 +413,9 @@ optimizer_recomb = optim.Adam(recomb.parameters(), lr=1e-3)
 # monet ckpt파일 로드
 ckpt_path = os.path.join(conf.checkpoint_dir, 'monet.ckpt')
 
-if os.path.isfile(conf.checkpoint_file):
-        monet.load_state_dict(torch.load(ckpt_path))
-        print('Restored Monet parameters from', ckpt_path)
+if os.path.isfile(ckpt_path):
+    monet.load_state_dict(torch.load(ckpt_path))
+    print('Restored Monet parameters from', ckpt_path)
 else:
     print('Start training Monet...')
 
@@ -491,7 +495,7 @@ else: #없으면 train constellation
         #constellation -> val
         val_loss=0.0
         num_batches = 0
-        for batch in val_loader:
+        for batch in val_data_loader:
             val_x, _ = batch
             if use_cuda:
                 val_x = val_x.cuda()
@@ -579,7 +583,7 @@ for param in dae.parameters():
 ckpt_path = os.path.join(conf.checkpoint_dir, 'bvae.ckpt')
 
 if os.path.isfile(ckpt_path):
-    bvae.load_state_dict(torch.load(ckpt_path)['bvae_model_state_dict'])
+    bvae.load_state_dict(torch.load(ckpt_path)) #['bvae_model_state_dict']
     print(f'Restored Bvae parameters from {ckpt_path}')
 else: #없으면 train bvae
     print('Start training BVAE...')
@@ -611,7 +615,7 @@ else: #없으면 train bvae
 
             r_val, _, _, _, _, _, _, _ = model.encode(val_x)
             batch_loss=val_bvae(dae, bvae, r_val.detach())
-            val_loss+=batch_loss.item()
+            val_loss+=batch_loss
 
         val_loss /= len(val_data_loader)
 
@@ -634,7 +638,7 @@ for param in bvae.parameters():
 ckpt_path = os.path.join(conf.checkpoint_dir, 'scan.ckpt')
 
 if os.path.isfile(ckpt_path):
-    scan.load_state_dict(torch.load(ckpt_path)['scan_model_state_dict'])
+    scan.load_state_dict(torch.load(ckpt_path)) #['scan_model_state_dict'])
     print(f'Restored SCAN parameters from {ckpt_path}')
 else: #없으면 train scan
     print('Start training SCAN...')
@@ -702,7 +706,7 @@ if os.path.isfile(ckpt_path):
 else: # 없으면 train recombinator
     print('Start training Recombinator...')
 
-    best_val_loss=float('int')
+    best_val_loss=float('inf')
     for epoch in range(num_epochs):  # 전체 학습 에포크 수
         train_loss=0
         for batch in data_loader:
@@ -741,18 +745,9 @@ else: # 없으면 train recombinator
 
         val_loss /=len(val_data_loader)
 
-        if val<loss <best_val_loss:
+        if val_loss <best_val_loss:
             best_val_loss=val_loss
             print(f'Updated .ckpt, loss: {best_val_loss}')
-            torch.save(recombinator.state_dict(), ckpt_path)
+            torch.save(recomb.state_dict(), ckpt_path)
 
 print('Train Fin.')
-
-# torch.save({    # 학습 체크포인트 최종 저장
-#     'constellation_model_state_dict': model.state_dict(),
-#     'monet_model_state_dict': monet.state_dict(),
-#     'scan_model_state_dict': scan.state_dict(),
-#     'bvae_model_state_dict': bvae.state_dict(),  # BVAE 모델 상태 저장, train 수정1
-#     'dae_model_state_dict': dae.state_dict(),    # DAE 모델 상태 저장 , train 수정 2
-#     'recomb_model_state_dict': recomb.state_dict(),
-# }, 'combined_models.pt')
